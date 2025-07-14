@@ -1,0 +1,24 @@
+name: kairos-gpu
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - scikit-learn
+  - lightgbm
+  - joblib
+  - duckdb
+  - polars
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+  - tensorflow
+  - pip
+  - pip:
+      - wandb
+      - optuna
+      - xformers

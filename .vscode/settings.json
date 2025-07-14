@@ -1,0 +1,9 @@
+{
+  // ensure you’re using Pylance
+  "python.languageServer": "Pylance",
+
+  // tell Pylance to index two levels deep under "tensorflow"
+  "python.analysis.packageIndexDepths": {
+    "tensorflow": 2
+  }
+}

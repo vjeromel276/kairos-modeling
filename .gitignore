@@ -1,0 +1,42 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
+.venv/
+env/
+venv/
+
+# PyInstaller
+*.spec
+
+# Virtualenv
+*.egg-info/
+
+# Data
+*.npz
+*.parquet
+data/
+original_data/
+output/
+checkpoints/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+#models
+*.h5
+*.pth
+*.ckpt
+*.keras
+*.joblib
