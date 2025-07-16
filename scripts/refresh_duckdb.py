@@ -86,7 +86,7 @@ def reload_csv_tables(conn: duckdb.DuckDBPyConnection, csv_dir: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Refresh DuckDB from NDL or CSVs")
-    parser.add_argument("--db", default="data/karios.duckdb", help="Path to DuckDB file")
+    parser.add_argument("--db", default="data/kairos.duckdb", help="Path to DuckDB file")
     parser.add_argument("--pull-metrics", action="store_true", help="Fetch new metrics from NDL API")
     parser.add_argument("--reload", action="store_true", help="Reload any *.csv files found in original_data/")
     parser.add_argument("--csv-dir", default="original_data", help="Directory to look for reloadable CSVs")

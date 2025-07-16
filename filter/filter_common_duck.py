@@ -1,19 +1,42 @@
 #!/usr/bin/env python3
-# filter_common_duck.py
-# —-----------------------------------------
-# DuckDB-native version of filter_common.py
-# Pulls from: sep_base, tickers, metrics tables
-# Outputs: filtered SEP Parquet + ticker universe CSV
+"""
+filter_common_duck.py
 
+DuckDB-native pipeline to filter and export a universe of liquid U.S. common stocks.
+
+This script applies the following filters:
+  1. Category: Domestic Common Stock (case-insensitive)
+  2. Not delisted
+  3. Minimum 1-month average daily volume (ADV)
+  4. Minimum trading days since start date
+  5. Optional price floor to exclude penny stocks
+
+Outputs:
+  - Parquet file of filtered SHARADAR SEP data
+  - CSV file of the ticker universe
+  - DuckDB table for the filtered universe, named mid_cap_<YYYY_MM_DD>
+
+Usage:
+    python scripts/filter_common_duck.py \
+        --db data/kairos.duckdb \
+        --min-adv 2000000 \
+        --min-days 252 \
+        --start-date 1998-01-01 \
+        --min-price 2.00 \
+        --bucket midcap_and_up \
+        --output-dir scripts/sep_dataset/feature_sets
+"""
 import argparse
 import os
 import logging
 from datetime import datetime
+
 import duckdb
 import pandas as pd
-from tqdm import tqdm
 from pandas.tseries.offsets import BDay
+from tqdm import tqdm
 
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s",
@@ -21,90 +44,144 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def validate_date(date_str: str) -> datetime.date: # type: ignore
-    return datetime.strptime(date_str, "%Y-%m-%d").date()
+def validate_date(date_str: str) -> pd.Timestamp:
+    """
+    Validate and parse a date string in YYYY-MM-DD format.
+    Returns a pandas.Timestamp.
+    """
+    return pd.to_datetime(date_str, format="%Y-%m-%d")
 
-def get_candidate_tickers(conn, min_volume: int) -> pd.DataFrame:
+def get_candidate_tickers(conn: duckdb.DuckDBPyConnection, min_adv: int) -> pd.DataFrame:
+    """
+    Fetch tickers with category common stock, not delisted, and ADV >= min_adv.
+    """
     query = f"""
     SELECT t.ticker
     FROM tickers t
     JOIN (
-        SELECT ticker, MAX(date) as latest_date
+        SELECT ticker, MAX(date) AS latest_date
         FROM metrics
         GROUP BY ticker
-    ) m_latest ON t.ticker = m_latest.ticker
-    JOIN metrics m ON m.ticker = m_latest.ticker AND m.date = m_latest.latest_date
-    WHERE 
-        LOWER(t.category) LIKE '%common stock%'
-        AND COALESCE(LOWER(t.isdelisted), 'false') IN ('false', '0', 'n', 'no')
-        AND m.volumeavg1m >= {min_volume}
+    ) ml ON t.ticker=ml.ticker
+    JOIN metrics m ON m.ticker=ml.ticker AND m.date=ml.latest_date
+    WHERE LOWER(t.category) LIKE '%common stock%'
+      AND COALESCE(LOWER(t.isdelisted), 'false') IN ('false','0','n','no')
+      AND m.volumeavg1m >= {min_adv}
     """
-    logger.info("Running DuckDB filter query for common stocks + volume...")
+    logger.info("Filtering common stocks with ADV >= %d", min_adv)
     df = conn.execute(query).fetchdf()
-    logger.info(f"Tickers meeting volume + category filters: {len(df):,}")
+    logger.info("Found %d candidate tickers", len(df))
     return df
 
-def ensure_min_trading_days(conn, tickers: pd.Series, min_days: int, start_date: str) -> pd.Index:
-    logger.info(f"Checking for >= {min_days} trading days since {start_date}...")
+def ensure_min_trading_days(
+    conn: duckdb.DuckDBPyConnection,
+    tickers: pd.Series,
+    min_days: int,
+    start_date: pd.Timestamp
+) -> pd.Index:
+    """
+    Ensure each ticker has >= min_days since start_date.
+    """
+    logger.info("Checking trading-day history >= %d since %s", min_days, start_date.date())
     valid = []
-    for ticker in tqdm(tickers, desc="Evaluating history length"):
+    for t in tqdm(tickers, desc="Checking history"):
         q = f"""
         SELECT date FROM sep_base
-        WHERE ticker = '{ticker}' AND date >= DATE '{start_date}'
+        WHERE ticker='{t}' AND date>=DATE'{start_date.date()}'
         ORDER BY date
         """
         df = conn.execute(q).fetchdf()
-        if len(df) < min_days:
+        if len(df)<min_days:
             continue
-        df_dates = pd.to_datetime(df["date"]).dt.normalize().drop_duplicates()
-        date_range = pd.date_range(start=df_dates.min(), end=df_dates.max(), freq=BDay())
-        if df_dates.isin(date_range).sum() >= min_days:
-            valid.append(ticker)
-    logger.info(f"Tickers with sufficient history: {len(valid):,} / {len(tickers):,}")
+        dates = pd.to_datetime(df['date']).dt.normalize().drop_duplicates()
+        full = pd.date_range(dates.min(), dates.max(), freq=BDay())
+        if dates.isin(full).sum()>=min_days:
+            valid.append(t)
+    logger.info("%d tickers have sufficient history", len(valid))
     return pd.Index(valid)
 
-def write_filtered_sep(conn, tickers: pd.Index, path: str, start_date: str):
-    logger.info("Extracting filtered SEP data from DuckDB...")
-    ticker_list = ",".join([f"'{t}'" for t in tickers])
-    query = f"""
-        SELECT * FROM sep_base
-        WHERE ticker IN ({ticker_list})
-        AND date >= DATE '{start_date}'
-        ORDER BY ticker, date
+def write_filtered_sep(
+    conn: duckdb.DuckDBPyConnection,
+    tickers: pd.Index,
+    path: str,
+    start_date: pd.Timestamp
+):
     """
-    df = conn.execute(query).fetchdf()
+    Write filtered sep_base rows for tickers since start_date to Parquet.
+    """
+    logger.info("Writing filtered SEP data to %s", path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    tickers_list = ",".join(f"'{t}'" for t in tickers)
+    q = f"""
+    SELECT * FROM sep_base
+    WHERE ticker IN ({tickers_list}) AND date>=DATE'{start_date.date()}'
+    ORDER BY ticker, date
+    """
+    df = conn.execute(q).fetchdf()
     df.to_parquet(path, index=False)
-    logger.info(f"Wrote filtered SEP Parquet: {path} ({len(df):,} rows)")
+    logger.info("Wrote %d rows to %s", len(df), path)
 
-def write_universe_csv(tickers: pd.Index, path: str):
+def write_universe_csv(
+    tickers: pd.Index,
+    path: str
+):
+    """
+    Save ticker list to CSV.
+    """
+    logger.info("Writing universe CSV to %s", path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    pd.DataFrame({"ticker": tickers}).to_csv(path, index=False)
-    logger.info(f"Wrote ticker universe CSV: {path} ({len(tickers):,} tickers)")
+    pd.DataFrame({'ticker':tickers}).to_csv(path, index=False)
+    logger.info("Wrote %d tickers", len(tickers))
 
 def main():
-    p = argparse.ArgumentParser(description="Filter common stocks using DuckDB-native pipeline.")
-    p.add_argument('--db', default="data/karios.duckdb", help="Path to DuckDB database")
-    p.add_argument('--min-volume', type=int, default=1000000)
+    p = argparse.ArgumentParser(description="Filter common stock universe")
+    p.add_argument('--db', default='data/kairos.duckdb')
+    p.add_argument('--min-adv', type=int, default=2000000)
     p.add_argument('--min-days', type=int, default=252)
-    p.add_argument('--start-date', default="1998-01-01")
-    p.add_argument('--bucket', default="midcap_and_up")
-    p.add_argument('--output-dir', default="feature_sets")
+    p.add_argument('--start-date', default='1998-01-01')
+    p.add_argument('--min-price', type=float, default=None)
+    p.add_argument('--bucket', default='midcap_and_up')
+    p.add_argument('--output-dir', default='scripts/sep_dataset/feature_sets')
     args = p.parse_args()
 
     start_date = validate_date(args.start_date)
     conn = duckdb.connect(args.db)
 
-    df_candidates = get_candidate_tickers(conn, args.min_volume)
-    valid = ensure_min_trading_days(conn, df_candidates["ticker"], args.min_days, args.start_date)
+    # 1) ADV + category
+    df_can = get_candidate_tickers(conn, args.min_adv)
+    # 2) History length
+    valid = ensure_min_trading_days(conn, df_can['ticker'], args.min_days, start_date)
+    # 3) Price floor
+    if args.min_price is not None:
+        logger.info("Applying price floor >= %0.2f", args.min_price)
+        tickers_csv = ",".join(f"'{t}'" for t in valid)
+        q2 = f"""
+        SELECT ticker FROM sep_base
+        WHERE ticker IN ({tickers_csv})
+          AND date=(SELECT MAX(date) FROM sep_base WHERE ticker=sep_base.ticker)
+          AND close>={args.min_price}
+        """
+        df_p = conn.execute(q2).fetchdf()
+        valid = valid.intersection(df_p['ticker'].tolist())
+        logger.info("%d tickers after price filter", len(valid))
 
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    sep_path = os.path.join(args.output_dir, f"{args.bucket}_tickers_features_{date_str}.parquet")
-    uni_path = os.path.join(args.output_dir, f"{args.bucket}_ticker_universe_{date_str}.csv")
+    # file paths
+    date_str = datetime.now().strftime('%Y_%m_%d')
+    sep_path = os.path.join(args.output_dir, f"{args.bucket}_features_{date_str}.parquet")
+    uni_path = os.path.join(args.output_dir, f"{args.bucket}_universe_{date_str}.csv")
 
-    write_filtered_sep(conn, valid, sep_path, args.start_date)
+    # 4) Write outputs
+    write_filtered_sep(conn, valid, sep_path, start_date)
     write_universe_csv(valid, uni_path)
-    logger.info("✅ filter_common_duck.py completed successfully.")
 
-if __name__ == "__main__":
+    # 5) Create DuckDB table mid_cap_<date>
+    table_name = f"mid_cap_{date_str}"
+    logger.info("Creating DuckDB table %s", table_name)
+    conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+    conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{sep_path}')")
+    logger.info("Table %s created in %s", table_name, args.db)
+
+    logger.info("✅ Completed filter and table creation")
+
+if __name__=='__main__':
     main()

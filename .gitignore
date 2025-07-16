@@ -26,6 +26,8 @@ data/
 original_data/
 output/
 checkpoints/
+*.xlsx
+*.csv
 
 # System
 .DS_Store

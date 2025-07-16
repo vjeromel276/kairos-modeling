@@ -13,7 +13,7 @@ import numpy as np
 
 # CLI setup
 parser = argparse.ArgumentParser()
-parser.add_argument("--db", default="data/karios.duckdb", help="Path to DuckDB")
+parser.add_argument("--db", default="data/kairos.duckdb", help="Path to DuckDB")
 parser.add_argument("--universe", required=True, help="Path to ticker universe CSV")
 parser.add_argument("--output-dir", default="data/framed/", help="Where to save frame shards")
 parser.add_argument("--window-size", type=int, default=252)

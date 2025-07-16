@@ -89,8 +89,14 @@ def predict(model_path, X):
         if input_shape[-1] == 3:
             X_input = X.reshape(1, 252, 3)
         else:
-            X_input = X.reshape(1, -1)
-        y_pred = model.predict(X_input)
+            patch_size = 42  # Same as training
+            n_timesteps, n_features = X.shape
+            assert n_timesteps == 252 and n_features == 3, "Unexpected input shape"
+
+            X_reshaped = X.reshape(1, 252, 3)
+            X_patched = X_reshaped.reshape(1, 6, 126)  # [batch, patches, patch_dim]
+            X_input = X_patched
+            y_pred = model.predict(X_input)
     else:
         raise ValueError(f"Unsupported model format: {ext}")
     return y_pred[0] if isinstance(y_pred, np.ndarray) else y_pred

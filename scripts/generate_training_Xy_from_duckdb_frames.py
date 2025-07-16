@@ -7,7 +7,7 @@ from tqdm import tqdm
 from pathlib import Path
 import os
 
-def main(db_path="data/karios.duckdb", output_dir="data/model_ready"):
+def main(db_path="data/kairos.duckdb", output_dir="data/model_ready"):
     con = duckdb.connect(db_path)
     print("🔗 Connected to DuckDB")
 
