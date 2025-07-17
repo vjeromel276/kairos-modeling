@@ -105,6 +105,10 @@ def main():
 
     # performance
     performance(pnl_ts, turnover_ts)
-
+    # Save P&L series for plotting
+    pnl_ts.to_csv("mh_strategy_pnl.csv")
+    print("→ Saved P&L series to mh_strategy_pnl.csv")
+    turnover_ts.to_csv("mh_strategy_turnover.csv")
+    print("→ Saved turnover series to mh_strategy_turnover.csv")
 if __name__ == "__main__":
     main()
