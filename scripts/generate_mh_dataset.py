@@ -124,5 +124,9 @@ if __name__ == "__main__":
         "--n_jobs", type=int, default=0,
         help="Number of parallel workers; 0 or negative uses all cores"
     )
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Use full 75-feature matrix from feat_matrix table"
+    )
     args = parser.parse_args()
     build_mh_dataset(args.window, args.n_jobs)
