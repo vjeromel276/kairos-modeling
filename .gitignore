@@ -42,3 +42,6 @@ Thumbs.db
 *.ckpt
 *.keras
 *.joblib
+*.pkl
+
+mh_lgbm.pkl
