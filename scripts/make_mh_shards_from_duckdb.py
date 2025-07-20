@@ -21,7 +21,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from sklearn.preprocessing import StandardScaler
 
 DB_PATH = "data/kairos.duckdb"
@@ -59,8 +59,8 @@ def create_windows(df: pd.DataFrame, window: int, feature_cols: list):
 
 
 def process_ticker(ticker: str, window: int, full: bool, out_dir: str):
-    con = duckdb.connect(DB_PATH)
     try:
+        con = duckdb.connect(f"{DB_PATH}?access_mode=read_only")
         if full:
             df = con.execute(f"""
                 SELECT fm.*, sb.closeadj
@@ -95,9 +95,12 @@ def process_ticker(ticker: str, window: int, full: bool, out_dir: str):
         meta_df.to_parquet(f"{prefix}_meta.parquet", index=False)
 
     except Exception as e:
-        print(f"[{ticker}] Error: {e}", file=sys.stderr)
+        raise RuntimeError(f"[{ticker}] Failed: {e}")
     finally:
-        con.close()
+        try:
+            con.close()
+        except:
+            pass
 
 
 def build_shards(window: int, n_jobs: int, full: bool, out_dir: str):
@@ -116,8 +119,12 @@ def build_shards(window: int, n_jobs: int, full: bool, out_dir: str):
         futures = {
             executor.submit(process_ticker, t, window, full, out_dir): t for t in tickers
         }
-        for _ in tqdm(futures, total=len(tickers), desc="Processing tickers"):
-            pass
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing tickers"):
+            try:
+                future.result()
+            except Exception as e:
+                print(str(e), file=sys.stderr)
 
     print(f"✅ Shards saved in: {out_dir}")
 
@@ -135,4 +142,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     build_shards(args.window, args.n_jobs, args.full, args.out_dir)
-    

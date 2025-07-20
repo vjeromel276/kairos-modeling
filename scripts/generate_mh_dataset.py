@@ -93,9 +93,9 @@ def process_ticker(ticker: str, window: int, full: bool):
         y_df = pd.DataFrame(y_list, columns=["ret_1d_f", "ret_5d_f", "ret_21d_f"])
         meta_df = pd.DataFrame(meta_records)
         prefix = f"mh_{window}_{ticker}"
-        X_df.to_parquet(f"{prefix}_X.parquet", index=False)
-        y_df.to_parquet(f"{prefix}_y.parquet", index=False)
-        meta_df.to_parquet(f"{prefix}_meta.parquet", index=False)
+        X_df.to_parquet(f"scripts/shards/{prefix}_X.parquet", index=False)
+        y_df.to_parquet(f"scripts/shards/{prefix}_y.parquet", index=False)
+        meta_df.to_parquet(f"scripts/shards/{prefix}_meta.parquet", index=False)
     finally:
         con.close()
 
@@ -109,7 +109,7 @@ def build_mh_dataset(window: int, n_jobs: int, full: bool):
     print(f"Building multi-horizon dataset (window={window}, full={full}) on {len(tickers)} tickers using {'all' if n_jobs<=0 else n_jobs} cores...")
 
     # Remove old shards
-    for shard in glob.glob(f"mh_{window}_*_*.parquet"):
+    for shard in glob.glob(f"scripts/shards/mh_{window}_*_*.parquet"):
         try:
             os.remove(shard)
         except OSError:
@@ -125,23 +125,23 @@ def build_mh_dataset(window: int, n_jobs: int, full: bool):
         for _ in tqdm(futures, total=len(tickers), desc="Processing tickers"):
             pass
 
-    # Combine shards into DuckDB tables
-    for name in ["X", "y", "meta"]:
-        table = f"mh_{name}_{window}"
-        pattern = f"mh_{window}_*_{name}.parquet"
-        master_con.execute(f"DROP TABLE IF EXISTS {table}")
-        master_con.execute(
-            f"CREATE TABLE {table} AS SELECT * FROM read_parquet('{pattern}')"
-        )
-        # Clean up shards
-        for shard in glob.glob(pattern):
-            try:
-                os.remove(shard)
-            except OSError:
-                pass
+    # # Combine shards into DuckDB tables
+    # for name in ["X", "y", "meta"]:
+    #     table = f"mh_{name}_{window}"
+    #     pattern = f"mh_{window}_*_{name}.parquet"
+    #     master_con.execute(f"DROP TABLE IF EXISTS {table}")
+    #     master_con.execute(
+    #         f"CREATE TABLE {table} AS SELECT * FROM read_parquet('{pattern}')"
+    #     )
+    #     # Clean up shards
+    #     for shard in glob.glob(pattern):
+    #         try:
+    #             os.remove(shard)
+    #         except OSError:
+    #             pass
 
-    print(f"✅ Built tables in DuckDB: mh_X_{window}, mh_y_{window}, mh_meta_{window}")
-    master_con.close()
+    # print(f"✅ Built tables in DuckDB: mh_X_{window}, mh_y_{window}, mh_meta_{window}")
+    # master_con.close()
 
 
 if __name__ == "__main__":

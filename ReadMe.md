@@ -12,22 +12,8 @@
     --bucket midcap_and_up \
     --output-dir feature_sets
 
-4) python scripts/generate_mh_dataset.py --window 252 --n_jobs 12 
+4) python scripts/generate_mh_dataset.py --window 126 --n_jobs 12 
 
-5) python scripts/train_mh_model.py  
+5) ❯ python scripts/train_model_shards.py --window 126 --model lgbm --save-every 20 --out-dir '/home/vjerome2/SSD_Quant/media/vjerome2/Extreme Pro/kairos_phase4/' 
 
-
-6) python scripts/simulate_mh_strategy.py \
-     --db data/kairos.duckdb \
-     --window 252 \
-     --model mh_lgbm.pkl \
-     --top-k 50 \
-     --hold 5
-
-7) python scripts/walk_forward_mh.py \ ### to much memory used 
-  --db data/kairos.duckdb \
-  --window 252 \
-  --initial-train-year 2015 \
-  --n-estimators 500 \
-  --learning-rate 0.05 \
-  --num-leaves 31
+1
