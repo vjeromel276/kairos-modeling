@@ -41,7 +41,7 @@ def load_shard(ticker: str, window: int, out_dir: str):
     return X, y
 
 
-def train_on_shards(window: int, model_type: str, out_dir: str, resume_from: str = None, save_every: int = 10):  # type: ignore
+def train_on_shards(window: int, model_type: str, out_dir: str, resume_from: str = None, save_every: int = 10): # type: ignore
     tickers = get_tickers(out_dir, window)
 
     if resume_from:
@@ -64,9 +64,8 @@ def train_on_shards(window: int, model_type: str, out_dir: str, resume_from: str
         try:
             X, y = load_shard(ticker, window, out_dir)
 
-            # Sanity checks
-            if len(X) < 100:
-                print(f"[{ticker}] Skipped: too few samples ({len(X)})")
+            if len(X) < 500:
+                print(f"[{ticker}] Skipped: only {len(X)} samples")
                 continue
             if y.std().mean() < 1e-4:
                 print(f"[{ticker}] Skipped: target too flat (std={y.std().mean():.6f})")
