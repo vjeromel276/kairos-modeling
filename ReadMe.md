@@ -12,7 +12,7 @@
     --bucket midcap_and_up \
     --output-dir feature_sets
 
-4) python scripts/generate_mh_dataset.py --window 126 --n_jobs 12 #=> puts shard groups in scripts/shards
+4) python scripts/make_mh_shards_from_duckdb.py --window 126 --full --n_jobs 8 --out-dir '/home/vjerome2/SSD_Quant/media/vjerome2/Extreme Pro/kairos_phase4/scripts/shards'
 
 5) ❯ python scripts/train_model_shards.py --window 126 --model lgbm --save-every 20 --out-dir '/home/vjerome2/SSD_Quant/media/vjerome2/Extreme Pro/kairos_phase4/' 
 
@@ -20,7 +20,7 @@
 
 6) python scripts/simulate_strategy_shards.py \
   --window 126 \
-  --shard-dir /home/vjerome2/SSD_Quant/media/vjerome2/Extreme\ Pro/kairos_phase4/data/shards \
+  --shard-dir /home/vjerome2/SSD_Quant/media/vjerome2/Extreme\ Pro/kairos_phase4/scripts/shards \
   --topk 50
 
 

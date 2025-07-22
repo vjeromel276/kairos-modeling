@@ -59,7 +59,9 @@ def simulate_top_k(preds_df, truth_df, k=50):
         })
 
     df_result = pd.DataFrame(results)
-    df_result["cumulative_return"] = (1 + df_result["mean_actual"]).cumprod()
+    # Convert log return to percent return before compounding
+    df_result["actual_pct_return"] = np.exp(df_result["mean_actual"]) - 1
+    df_result["cumulative_return"] = (1 + df_result["actual_pct_return"]).cumprod()
     df_result["rolling_sharpe"] = (
         df_result["mean_actual"].rolling(20).mean() /
         df_result["mean_actual"].rolling(20).std().replace(0, np.nan)
@@ -71,7 +73,7 @@ def main(window, shard_dir, topk):
     truth = load_ground_truth(shard_dir, window)
     result = simulate_top_k(preds, truth, k=topk)
 
-    out_csv = os.path.join(shard_dir, f"strategy_sim_{window}_top{topk}.csv")
+    out_csv = os.path.join(shard_dir, f"strategy_sim_{window}_top{topk}.csv") 
     result.to_csv(out_csv, index=False)
 
     print(f"✅ Strategy simulation saved to: {out_csv}")
