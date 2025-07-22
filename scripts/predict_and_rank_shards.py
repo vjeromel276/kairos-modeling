@@ -32,7 +32,7 @@ def main(window: int, model_path: str, shard_dir: str):
 
             y_pred = model.predict(X)
             df_pred = pd.DataFrame(y_pred, columns=["ret_1d_pred", "ret_5d_pred", "ret_21d_pred"])
-            df_pred["ticker"] = ticker
+            # df_pred["ticker"] = ticker
 
             # Align meta + predictions
             df_out = pd.concat([meta_df.reset_index(drop=True), df_pred.reset_index(drop=True)], axis=1)

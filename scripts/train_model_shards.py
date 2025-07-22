@@ -29,13 +29,13 @@ from lightgbm import LGBMRegressor
 
 
 def get_tickers(out_dir: str, window: int):
-    x_files = glob.glob(os.path.join(out_dir, f"mh_{window}_*_X.parquet"))
+    x_files = glob.glob(os.path.join(out_dir, f"scripts/shards/mh_{window}_*_X.parquet"))
     tickers = sorted([os.path.basename(f).split("_")[2] for f in x_files])
     return tickers
 
 
 def load_shard(ticker: str, window: int, out_dir: str):
-    base = os.path.join(out_dir, f"mh_{window}_{ticker}")
+    base = os.path.join(out_dir, f"scripts/shards/mh_{window}_{ticker}")
     X = pd.read_parquet(base + "_X.parquet")
     y = pd.read_parquet(base + "_y.parquet")
     return X, y

@@ -38,29 +38,37 @@ def compute_basic_features(df: pd.DataFrame) -> pd.DataFrame:
 def create_windows(df: pd.DataFrame, window: int, feature_cols: list):
     X_list, y_list, meta_records = [], [], []
     total = len(df)
-    for i in range(total - window - 21):  # ensures we can get up to t+21
+    for i in range(total - window - 21):
         hist = df.iloc[i : i + window]
         fwd = df.iloc[i + window : i + window + 22]
+
         if len(hist) < window or len(fwd) < 22:
             continue
-        last_price = hist["closeadj"].iloc[-1]
-        X_list.append(hist[feature_cols].values.astype(np.float32))
-        y_list.append([
-            np.log(fwd["closeadj"].iloc[1] / last_price),
-            np.log(fwd["closeadj"].iloc[5] / last_price),
-            np.log(fwd["closeadj"].iloc[21] / last_price)
-        ])
-        meta_records.append({
-            "ticker": hist["ticker"].iloc[0],
-            "start_date": hist["date"].iloc[0],
-            "end_date": hist["date"].iloc[-1]
-        })
+
+        try:
+            last_price = hist["closeadj"].iloc[-1]
+
+            # Defensive float conversion
+            ret_1d = float(np.log(fwd["closeadj"].iloc[1] / last_price))
+            ret_5d = float(np.log(fwd["closeadj"].iloc[5] / last_price))
+            ret_21d = float(np.log(fwd["closeadj"].iloc[21] / last_price))
+
+            X_list.append(hist[feature_cols].values.flatten())
+            y_list.append([ret_1d, ret_5d, ret_21d])
+            meta_records.append({
+                "ticker": hist["ticker"].iloc[0],
+                "start_date": hist["date"].iloc[0],
+                "end_date": hist["date"].iloc[-1]
+            })
+        except Exception:
+            continue  # skip bad frame
+
     return X_list, y_list, meta_records
 
 
 def process_ticker(ticker: str, window: int, full: bool, out_dir: str):
     try:
-        con = duckdb.connect(f"{DB_PATH}?access_mode=read_only")
+        con = duckdb.connect(DB_PATH, read_only=True)
         if full:
             df = con.execute(f"""
                 SELECT fm.*, sb.closeadj
@@ -85,17 +93,13 @@ def process_ticker(ticker: str, window: int, full: bool, out_dir: str):
         if not X_list:
             return
 
-        X_arr = np.stack(X_list)
-        y_df = pd.DataFrame(y_list, columns=["ret_1d_f", "ret_5d_f", "ret_21d_f"])
-        meta_df = pd.DataFrame(meta_records)
-
         prefix = os.path.join(out_dir, f"mh_{window}_{ticker}")
-        pd.DataFrame(X_arr.reshape(X_arr.shape[0], -1)).to_parquet(f"{prefix}_X.parquet", index=False)
-        y_df.to_parquet(f"{prefix}_y.parquet", index=False)
-        meta_df.to_parquet(f"{prefix}_meta.parquet", index=False)
+        pd.DataFrame(X_list).to_parquet(f"{prefix}_X.parquet", index=False)
+        pd.DataFrame(y_list, columns=["ret_1d_f", "ret_5d_f", "ret_21d_f"]).to_parquet(f"{prefix}_y.parquet", index=False)
+        pd.DataFrame(meta_records).to_parquet(f"{prefix}_meta.parquet", index=False)
 
     except Exception as e:
-        raise RuntimeError(f"[{ticker}] Failed: {e}")
+        print(f"[{ticker}] Failed: {e}", file=sys.stderr)
     finally:
         try:
             con.close()
@@ -105,7 +109,7 @@ def process_ticker(ticker: str, window: int, full: bool, out_dir: str):
 
 def build_shards(window: int, n_jobs: int, full: bool, out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
-    con = duckdb.connect(DB_PATH)
+    con = duckdb.connect(DB_PATH, read_only=True)
     tickers = [row[0] for row in con.execute(
         "SELECT DISTINCT ticker FROM feat_matrix" if full else
         "SELECT DISTINCT ticker FROM mid_cap_2025_07_15"
