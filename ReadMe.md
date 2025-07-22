@@ -23,5 +23,7 @@
   --shard-dir /home/vjerome2/SSD_Quant/media/vjerome2/Extreme\ Pro/kairos_phase4/scripts/shards \
   --topk 50
 
+moving to verify results 
+
 
 #### Need to re-run  python scripts/predict_and_rank_shards.py --window 126 --model '/home/vjerome2/SSD_Quant/media/vjerome2/Extreme Pro/kairos_phase4/mh_lgbm_126.pkl' --shard-dir '/home/vjerome2/SSD_Quant/media/vjerome2/Extreme Pro/kairos_phase4/scripts/shards' to get the proper pred files for scoring and strategy
