@@ -28,6 +28,7 @@ output/
 checkpoints/
 *.xlsx
 *.csv
+*.txt
 
 # System
 .DS_Store
@@ -45,3 +46,4 @@ Thumbs.db
 *.pkl
 
 mh_lgbm.pkl
+trained_shards.txt
