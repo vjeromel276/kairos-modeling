@@ -1,8 +1,10 @@
+#!/usr/bin/env python3
 """
 build_full_feature_matrix.py
 
 Joins all feat_* tables + targets into a training-ready matrix.
 Filters to a user-specified universe CSV.
+Lag-aligns features to avoid forward-looking leakage.
 
 Usage:
     python scripts/features/build_full_feature_matrix.py \
@@ -19,7 +21,7 @@ import argparse
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True, help="Path to DuckDB database")
-    parser.add_argument("--date", required=True, help="Date string (YYYY-MM-DD)")
+    parser.add_argument("--date", required=True, help="Date string (YYYY-MM-DD")
     parser.add_argument("--universe", required=True, help="Path to ticker universe CSV")
     args = parser.parse_args()
 
@@ -32,7 +34,7 @@ def main():
 
     # Discover feat_* tables
     tables = con.execute("SHOW TABLES").fetchdf()["name"].tolist()
-    feature_tables = [t for t in tables if t.startswith("feat_")]
+    feature_tables = [t for t in tables if t.startswith("feat_") and t != "feat_targets"]
 
     if not feature_tables:
         raise RuntimeError("❌ No feat_* tables found in DuckDB")
@@ -41,34 +43,40 @@ def main():
 
     # Start with the first table
     base = feature_tables[0]
-    join_query = f"SELECT * FROM {base}"
+    join_query = f"SELECT ticker, date, * EXCLUDE(ticker, date) FROM {base}"
 
     for t in feature_tables[1:]:
         cols = con.execute(f"PRAGMA table_info('{t}')").fetchdf()
-        dupes = [c for c in cols["name"] if c in ("ticker", "date")]
-        select_cols = ", ".join([f"{t}.{c}" for c in cols["name"] if c not in dupes])
+        select_cols = ", ".join([f"{t}.{c}" for c in cols["name"] if c not in ("ticker", "date")])
         join_query = f"""
             SELECT *
             FROM ({join_query}) AS base
             LEFT JOIN (
-                SELECT ticker, date, {select_cols}
-                FROM {t}
+                SELECT ticker, date, {select_cols} FROM {t}
             ) AS {t}
             USING (ticker, date)
         """
 
-    # Final query with universe filter
+    # Wrap and lag features back 1 day from targets
     final_query = f"""
-        SELECT *
-        FROM ({join_query}) AS merged
-        INNER JOIN ticker_universe USING (ticker)
-        WHERE ticker IS NOT NULL AND date IS NOT NULL
+        WITH lagged_features AS (
+            SELECT *, DATE_ADD(date, INTERVAL 1 DAY) AS date_plus1 FROM ({join_query})
+        ),
+        targets AS (
+            SELECT * FROM feat_targets
+        )
+        SELECT targets.ticker, targets.date, lagged_features.* EXCLUDE(ticker, date, date_plus1)
+        FROM targets
+        JOIN lagged_features
+          ON targets.ticker = lagged_features.ticker
+         AND targets.date = lagged_features.date_plus1
+        JOIN ticker_universe ON targets.ticker = ticker_universe.ticker
+        WHERE targets.ticker IS NOT NULL AND targets.date IS NOT NULL
     """
 
     df = con.execute(final_query).fetchdf()
     print(f"✅ Final matrix: {df.shape[0]:,} rows × {df.shape[1]} columns")
 
-    # Save to table + snapshot
     con.execute("DROP TABLE IF EXISTS feat_matrix")
     con.execute("CREATE TABLE feat_matrix AS SELECT * FROM df")
 

@@ -17,6 +17,10 @@ c) python filter/filter_common_duck.py
     --bucket midcap_and_up \
     --output-dir feature_sets
 
+d) python features/build_full_feature_matrix.py \
+    --db data/kairos.duckdb \
+    --date 2025-07-24 \
+    --universe '/home/vjerome2/SSD_Quant/media/vjerome2/Extreme Pro/kairos_phase4/feature_sets/midcap_and_up_universe_2025_07_24.csv'
 
 🟨 Source Tables in DuckDB
 
