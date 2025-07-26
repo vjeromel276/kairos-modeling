@@ -1,0 +1,16 @@
+model: ridge
+
+targets:
+  - ret_1d_f
+  - ret_5d_f
+  - ret_21d_f
+
+features:
+  - log_return
+  - volume_z
+  - price_norm
+
+params:
+  alpha: 1.0
+  fit_intercept: true
+
