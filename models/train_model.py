@@ -138,6 +138,11 @@ metrics_name = f"metrics_{model_type}_{args.year}.csv"
 
 joblib.dump(model, os.path.join(OUTPUT_DIR, model_name))
 pd.DataFrame(y_pred, columns=[f'{t}_pred' for t in targets]).to_csv(os.path.join(OUTPUT_DIR, pred_name), index=False) # type: ignore
+pred_df = df_val[["ticker", "date"]].copy()
+for i, t in enumerate(targets):
+    pred_df[f"{t}_pred"] = y_pred[:, i] # type: ignore
+
+pred_df.to_csv(os.path.join(OUTPUT_DIR, pred_name), index=False)
 eval_df.to_csv(os.path.join(OUTPUT_DIR, metrics_name), index=False)
 
 print(f"✅ Model saved to {model_name}")
