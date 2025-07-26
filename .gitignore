@@ -28,6 +28,9 @@ output/
 checkpoints/
 *.xlsx
 *.csv
+*.old
+*.txt
+*.pkl
 
 # System
 .DS_Store
