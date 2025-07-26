@@ -119,3 +119,43 @@ Saves to:
     Retrain and track SHAP/multi-horizon performance
 
     Simulate trading strategy performance using predicted ret_5d_f
+
+### [python]
+
+🧪 Full Pipeline Example: 2008 Universe
+
+### 1. Filter tickers active since 2008
+python filter/filter_universe_by_start_date.py --year 2008
+
+### 2. Build 3-feature matrix from sep_base + midcap_2008_universe
+python features/build_feat_matrix_complete.py --year 2008
+
+### 3. Add forward return targets (ret_1d_f, ret_5d_f, ret_21d_f)
+python scripts/generate_targets.py --year 2008
+
+### 4. Train Ridge model on complete + target matrix
+python models/train_model.py --config models/config/ridge_2008.yaml --year 2008
+
+🧪 Full Pipeline Example: 2014 Universe
+
+### 1. Filter tickers active since 2014
+python filter/filter_universe_by_start_date.py --year 2014
+
+### 2. Build 3-feature matrix from sep_base + midcap_2014_universe
+python features/build_feat_matrix_complete.py --year 2014
+
+### 3. Add forward return targets (ret_1d_f, ret_5d_f, ret_21d_f)
+python scripts/generate_targets.py --year 2014
+
+### 4. Train LightGBM model on complete + target matrix
+python models/train_model.py --config models/config/lgbm_2014.yaml --year 2014
+
+✅ What You’ll Have After Running
+Output File	Description
+midcap_2008_universe	Tickers with full data since 2008
+feat_matrix_complete_2008	Clean feature matrix
+feat_matrix_targets_2008	With future return targets
+models/output/ridge_ret_*.pkl	Trained Ridge model
+predictions_ridge_2008.csv	Model predictions
+metrics_ridge_2008.csv	MSE, R², accuracy, Sharpe
+And the same for 2014.
