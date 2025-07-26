@@ -45,6 +45,12 @@ con = duckdb.connect(DB_PATH)
 df = con.execute(f"SELECT * FROM {TABLE_NAME}").fetchdf()
 
 # ------------------------
+# Output Directory
+# ------------------------
+OUTPUT_DIR = 'models/output'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ------------------------
 # Prepare Training Data
 # ------------------------
 df = df.dropna(subset=features + targets)
@@ -103,10 +109,28 @@ print("📊 Evaluation:")
 print(eval_df)
 
 # ------------------------
+# SHAP Value Analysis (LightGBM only)
+# ------------------------
+if model_type == 'lgbm':
+    import shap
+    print("🔍 Computing SHAP values...")
+
+    explainer = shap.Explainer(model.estimators_[0], X_val)
+    shap_values = [explainer(X_val) for model in model.estimators_]
+
+    # Save top-20 mean absolute SHAP values per target
+    for i, (target, sv) in enumerate(zip(targets, shap_values)):
+        shap_df = pd.DataFrame({
+            'feature': X_val.columns,
+            'mean_abs_shap': np.abs(sv.values).mean(axis=0)
+        }).sort_values(by='mean_abs_shap', ascending=False).head(20)
+
+        shap_df.to_csv(os.path.join(OUTPUT_DIR, f"shap_{model_type}_{target}_{args.year}.csv"), index=False)
+        print(f"✅ SHAP values saved for {target}")
+
+# ------------------------
 # Save Outputs
 # ------------------------
-OUTPUT_DIR = 'models/output'
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 model_name = f"{model_type}_{'_'.join(targets)}_{args.year}.pkl"
 pred_name = f"predictions_{model_type}_{args.year}.csv"
