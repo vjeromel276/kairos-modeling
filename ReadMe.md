@@ -124,4 +124,6 @@ python models/train_model.py --config models/config/ridge_2008.yaml --year 2008
 python models/train_model.py --config models/config/lgbm_2008.yaml --year 2008
 python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_2008.csv --tag ridge_v1
 python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
+python scripts/simulate_strategy.py --pred-file models/output/predictions_mlp_2008.csv --tag mlp_v1
+python scripts/simulate_strategy.py --pred-file models/output/predictions_xgb_2008.csv --tag xgb_v1
 ```
