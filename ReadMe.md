@@ -101,6 +101,9 @@ python models/train*model.py --config models/config/lgbm_2008.yaml --year 2008
 python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_2008.csv --tag ridge_v1
 python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
 ```
+### 7. Predict Live
+```python
+```
 # ✅ After Running
 Output Description
 midcap_2008_universe Filtered tickers with coverage
