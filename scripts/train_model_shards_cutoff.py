@@ -11,15 +11,15 @@ Each shard group:
     mh_<window>_<TICKER>_meta.parquet
 
 Supports:
-- LightGBM or Ridge
+- XGBoost or Ridge
 - Save every N tickers
 
 Usage:
     python train_model_shards_cutoff.py \
         --window 126 \
-        --model lgbm \
-        --out-dir /path/to/shards \
+        --model xgb \
         --cutoff 2022-12-31 \
+        --out-dir scripts/shards \
         --save-every 10
 """
 
@@ -32,7 +32,7 @@ import joblib
 from tqdm import tqdm
 from sklearn.linear_model import Ridge
 from sklearn.multioutput import MultiOutputRegressor
-from lightgbm import LGBMRegressor
+from xgboost import XGBRegressor
 
 def get_tickers(out_dir: str, window: int):
     x_files = glob.glob(os.path.join(out_dir, f"mh_{window}_*_X.parquet"))
@@ -73,12 +73,20 @@ def train_on_shards(window: int, model_type: str, out_dir: str, cutoff: str, sav
     # Choose model
     if model_type == "ridge":
         base_model = Ridge(alpha=1.0)
-    elif model_type == "lgbm":
-        base_model = LGBMRegressor(n_estimators=100, learning_rate=0.1)
+    elif model_type == "xgb":
+        base_model = XGBRegressor(
+            tree_method="hist",  # formerly gpu_hist
+            device="cuda",
+            max_bin=64,
+            max_depth=6,
+            n_estimators=100,
+            learning_rate=0.1,
+            verbosity=1
+        )
     else:
-        raise ValueError("model_type must be 'ridge' or 'lgbm'")
+        raise ValueError("model_type must be 'ridge' or 'xgb'")
 
-    model = MultiOutputRegressor(base_model)  # type: ignore
+    model = MultiOutputRegressor(base_model)
 
     trained_count = 0
     for ticker in tqdm(tickers, desc="Training shards"):
@@ -86,7 +94,11 @@ def train_on_shards(window: int, model_type: str, out_dir: str, cutoff: str, sav
         if X is None or y is None:
             continue
 
-        model.partial_fit(X, y) if hasattr(model, "partial_fit") else model.fit(X, y)
+        # Clean bad values for GPU compatibility
+        X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+        y = y.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+        model.fit(X, y)
         trained_count += 1
 
         with open("trained_shards_cutoff.txt", "a") as f:
@@ -104,7 +116,7 @@ def train_on_shards(window: int, model_type: str, out_dir: str, cutoff: str, sav
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--window", type=int, default=126, help="Input window size")
-    parser.add_argument("--model", choices=["ridge", "lgbm"], default="lgbm")
+    parser.add_argument("--model", choices=["ridge", "xgb"], default="xgb")
     parser.add_argument("--out-dir", type=str, required=True, help="Directory with shard files")
     parser.add_argument("--cutoff", type=str, default="2022-12-31", help="Max end_date for training data")
     parser.add_argument("--save-every", type=int, default=10, help="Checkpoint every N tickers")

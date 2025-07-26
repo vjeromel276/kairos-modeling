@@ -18,6 +18,7 @@ Usage:
 import argparse
 import os
 import glob
+import numpy as np
 import pandas as pd
 import joblib
 from tqdm import tqdm
@@ -38,7 +39,7 @@ def main(window: int, model_path: str, shard_dir: str, cutoff: str):
             meta_path = os.path.join(shard_dir, f"mh_{window}_{ticker}_meta.parquet")
             meta_df = pd.read_parquet(meta_path)
             meta_df["end_date"] = pd.to_datetime(meta_df["end_date"])
-
+            X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
             y_pred = model.predict(X)
             df_pred = pd.DataFrame(y_pred, columns=["ret_1d_pred", "ret_5d_pred", "ret_21d_pred"])
 

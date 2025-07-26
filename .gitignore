@@ -29,6 +29,7 @@ checkpoints/
 *.xlsx
 *.csv
 *.txt
+*.old
 
 # System
 .DS_Store
