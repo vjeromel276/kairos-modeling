@@ -1,161 +1,127 @@
-🧠 Kairos: Complete Universe Modeling Pipeline (v1)
+# 🧠 Kairos: Complete Universe Modeling Pipeline (v2)
 
-This branch implements a clean, consistent pipeline for building predictive models on a fixed universe of US mid/large-cap equities. It is designed for stability, forward compatibility, and iterative feature/model evolution.
-📐 Project Goals
+This pipeline builds **stable, reproducible, and research-grade predictive models** on a fixed universe of US mid/large-cap equities. It's structured for **modularity, forward compatibility**, and **iterative alpha discovery**.
 
-    Build a time-consistent universe of tradable tickers
+---
 
-    Generate a complete historical feature matrix per universe
+## 📐 Project Goals
 
-    Train modular, swappable models on multiple return targets
+- Build a **time-consistent universe** of tradable tickers  
+- Generate a **historical feature matrix** with scalable alpha features  
+- Train **modular, swappable models** on multi-horizon targets  
+- Simulate **top-k strategies** to test tradeability  
+- Log results to **DuckDB** for meta-analysis  
+- Enable **iterative refinement and ensemble stacking**  
 
-    Evaluate model quality with real-world metrics (Sharpe, direction accuracy, etc.)
+## 🛠️ Pipeline Overview
+```flow
+        ┌────────────────────────────┐
+        │   sep_base / mid_cap_xx    │
+        └────────────┬───────────────┘
+                     ▼
+┌────────────────────────────────────────────┐
+│ filter/filter_universe_by_start_date.py    │
+│ ➤ Outputs: midcap_<year>universe           │
+└────────────────┬───────────────────────────┘
+                 ▼
+┌────────────────────────────────────────────┐
+│ refresh_feature_tables.py                  │
+│ ➤ Runs all features/feat.py scripts        │
+│ ➤ Outputs: feat_price_action, feat_trend…  │
+└────────────────┬───────────────────────────┘
+                 ▼
+┌────────────────────────────────────────────┐
+│ features/build_feat_matrix_complete.py     │
+│ ➤ --full joins all feat_ tables            │
+│ ➤ Outputs: feat_matrix_complete_<year>     │
+└────────────────┬───────────────────────────┘
+                 ▼
+┌────────────────────────────────────────────┐
+│ scripts/generate_targets.py                │
+│ ➤ Computes: ret_1d_f, ret_5d_f, ret_21d_f  │
+│ ➤ Outputs: feat_matrix_targets_<year>      │
+└────────────────┬───────────────────────────┘
+                 ▼
+┌────────────────────────────────────────────┐
+│ models/train_model.py                      │
+│ ➤ Trains Ridge / LGBM on target matrix     │
+│ ➤ Saves: model.pkl, predictions.csv        │
+│ ➤ Logs SHAP (LGBM only)                    │
+└────────────────┬───────────────────────────┘
+                 ▼
+┌────────────────────────────────────────────┐
+│ scripts/simulate_strategy.py               │
+│ ➤ Simulates top-K strategy from predictions│
+│ ➤ Logs to DuckDB: strategy_stats           │
+└────────────────────────────────────────────┘
+```
 
-    Support dual-track universes (long-history vs wide-coverage)
+## 🚀 Step-by-Step Usage
 
-    Enable reproducible feature experiments going forward
+### 0. Daily Downloads ( Perform Every Trading Day )
 
-🛠️ Pipeline Overview
+```python
+python scripts/daily_download.py --date 2025-07-25
+python scripts/merge_daily_download_duck.py --update-golden '/mnt/ssd_quant/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb'  
+```
+### 1. Filter Modeling Universe by Start Date
 
-                ┌────────────────────────────┐
-                │  sep_base / mid_cap_xx     │
-                └────────────┬───────────────┘
-                             ▼
-     ┌────────────────────────────────────────────┐
-     │ filter/filter_universe_by_start_date.py    │
-     │ ➤ Outputs: midcap_<year>_universe          │
-     └────────────────┬───────────────────────────┘
-                      ▼
-     ┌────────────────────────────────────────────┐
-     │ features/build_feat_matrix_complete.py     │
-     │ ➤ Inputs: sep_base + midcap_<year>_universe│
-     │ ➤ Outputs: feat_matrix_complete_<year>     │
-     └────────────────┬───────────────────────────┘
-                      ▼
-     ┌────────────────────────────────────────────┐
-     │ scripts/generate_targets.py                │
-     │ ➤ Computes: ret_1d_f, ret_5d_f, ret_21d_f   │
-     │ ➤ Outputs: feat_matrix_targets_<year>      │
-     └────────────────┬───────────────────────────┘
-                      ▼
-     ┌────────────────────────────────────────────┐
-     │ models/train_model.py                      │
-     │ ➤ Trains Ridge / LGBM on selected targets  │
-     │ ➤ Saves: model .pkl, predictions, metrics  │
-     └────────────────────────────────────────────┘
-
-🚀 Step-by-Step Usage
-1. Filter Modeling Universe by Start Date
-
+```python
 python filter/filter_universe_by_start_date.py --year 2008
 python filter/filter_universe_by_start_date.py --year 2014
-
-Creates:
-
-    midcap_2008_universe
-
-    midcap_2014_universe
-    in DuckDB
-
-2. Build Complete Feature Matrix (3 core features so far)
-
+```
+### 2. Generate All Feature Tables
+   ```python
+   python refresh_feature_tables.py
+   ```
+### 3. Build Feature Matrix
+#### Base version (3 features)
+```python
 python features/build_feat_matrix_complete.py --year 2008
-python features/build_feat_matrix_complete.py --year 2014
-
-Creates:
-
-    feat_matrix_complete_2008
-
-    feat_matrix_complete_2014
-    with:
-    log_return, volume_z, price_norm
-
-3. Generate Forward Return Targets
-
-python scripts/generate_targets.py --year 2008
-python scripts/generate_targets.py --year 2014
-
-Computes:
-
-    ret_1d_f, ret_5d_f, ret_21d_f
-
-Creates:
-
-    feat_matrix_targets_2008
-
-    feat_matrix_targets_2014
-
-4. Train Ridge or LightGBM Model
-
-Prepare a config file like models/config/ridge_2008.yaml or lgbm_2014.yaml, then:
-
+```
+#### Full version (joins all feat\_\* tables)
+```python
+python features/build_feat_matrix_complete.py --year 2008 --full
+```
+### 4. Add Forward Targets
+```python
+python scripts/generate_targets.py --year 2008 5. Train a Model
+```
+### 5. Train Model
+#### Ridge
+```python
 python models/train_model.py --config models/config/ridge_2008.yaml --year 2008
-python models/train_model.py --config models/config/lgbm_2014.yaml --year 2014
+```
+#### LightGBM
+```python
+python models/train*model.py --config models/config/lgbm_2008.yaml --year 2008 
+```
+### 6. Simulate Strategy and Log to DuckDB
+```python
+python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_2008.csv --tag ridge_v1
+python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
+```
+# ✅ After Running
+Output Description
+midcap_2008_universe Filtered tickers with coverage
+feat_matrix_complete_2008 Feature matrix with engineered features
+feat_matrix_targets_2008 Matrix + future return targets
+\*.pkl Trained model file
+predictions*_.csv Model predictions + actuals
+metrics\__.csv MSE, R², Sharpe, accuracy
+shap\_\*.csv Feature importance (LGBM only)
+strategy_stats (DuckDB) Logged results: Sharpe, drawdown, etc.
 
-Saves to:
-
-    models/output/*.pkl (model)
-
-    predictions_<model>_<year>.csv
-
-    metrics_<model>_<year>.csv
-
-    shap_<model>_<target>_<year>.csv (LGBM only)
-
-📊 Evaluation Metrics
-
-    R² – Fit quality
-
-    MSE – Error magnitude
-
-    Directional Accuracy – How often the model gets up/down direction right
-
-    Sharpe Ratio – Predicted risk-adjusted return (5-day horizon)
-
-🔜 Next Steps (on add-features branch)
-
-    Add additional alpha features (momentum, volatility, fundamentals, etc.)
-
-    Retrain and track SHAP/multi-horizon performance
-
-    Simulate trading strategy performance using predicted ret_5d_f
-
-### [python]
-
-🧪 Full Pipeline Example: 2008 Universe
-
-### 1. Filter tickers active since 2008
+# 🧪 Example: Full 2008 Run
+```python
+python scripts/daily_download.py --date 2025-07-25  
+python scripts/merge_daily_download_duck.py --update-golden '/mnt/ssd_quant/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb'
 python filter/filter_universe_by_start_date.py --year 2008
-
-### 2. Build 3-feature matrix from sep_base + midcap_2008_universe
-python features/build_feat_matrix_complete.py --year 2008
-
-### 3. Add forward return targets (ret_1d_f, ret_5d_f, ret_21d_f)
+python refresh_feature_tables.py
+python features/build_feat_matrix_complete.py --year 2008 --full
 python scripts/generate_targets.py --year 2008
-
-### 4. Train Ridge model on complete + target matrix
 python models/train_model.py --config models/config/ridge_2008.yaml --year 2008
-
-🧪 Full Pipeline Example: 2014 Universe
-
-### 1. Filter tickers active since 2014
-python filter/filter_universe_by_start_date.py --year 2014
-
-### 2. Build 3-feature matrix from sep_base + midcap_2014_universe
-python features/build_feat_matrix_complete.py --year 2014
-
-### 3. Add forward return targets (ret_1d_f, ret_5d_f, ret_21d_f)
-python scripts/generate_targets.py --year 2014
-
-### 4. Train LightGBM model on complete + target matrix
-python models/train_model.py --config models/config/lgbm_2014.yaml --year 2014
-
-✅ What You’ll Have After Running
-Output File	Description
-midcap_2008_universe	Tickers with full data since 2008
-feat_matrix_complete_2008	Clean feature matrix
-feat_matrix_targets_2008	With future return targets
-models/output/ridge_ret_*.pkl	Trained Ridge model
-predictions_ridge_2008.csv	Model predictions
-metrics_ridge_2008.csv	MSE, R², accuracy, Sharpe
-And the same for 2014.
+python models/train_model.py --config models/config/lgbm_2008.yaml --year 2008
+python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_2008.csv --tag ridge_v1
+python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
+```
