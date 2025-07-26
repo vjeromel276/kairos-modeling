@@ -113,20 +113,23 @@ print(eval_df)
 # ------------------------
 if model_type == 'lgbm':
     import shap
-    print("🔍 Computing SHAP values...")
 
-    explainer = shap.Explainer(model.estimators_[0], X_val)
-    shap_values = [explainer(X_val) for model in model.estimators_]
+    shap_values = []
+    for i, est in enumerate(model.estimators_):
+        print(f"🔍 SHAP for target: {targets[i]}")
+        explainer = shap.TreeExplainer(est)
+        sv = explainer.shap_values(X_val)
+        shap_values.append(sv)
 
-    # Save top-20 mean absolute SHAP values per target
-    for i, (target, sv) in enumerate(zip(targets, shap_values)):
+        # Save top-20 feature importances
         shap_df = pd.DataFrame({
             'feature': X_val.columns,
-            'mean_abs_shap': np.abs(sv.values).mean(axis=0)
+            'mean_abs_shap': np.abs(sv).mean(axis=0)
         }).sort_values(by='mean_abs_shap', ascending=False).head(20)
 
-        shap_df.to_csv(os.path.join(OUTPUT_DIR, f"shap_{model_type}_{target}_{args.year}.csv"), index=False)
-        print(f"✅ SHAP values saved for {target}")
+        shap_df.to_csv(f"models/output/shap_lgbm_{targets[i]}_{args.year}.csv", index=False)
+        print(f"✅ SHAP values saved: shap_lgbm_{targets[i]}_{args.year}.csv")
+
 
 # ------------------------
 # Save Outputs

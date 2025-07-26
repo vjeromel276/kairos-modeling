@@ -17,24 +17,27 @@ DB_PATH = "data/kairos.duckdb"
 INPUT_TABLE = f"feat_matrix_complete_{args.year}"
 OUTPUT_TABLE = f"feat_matrix_targets_{args.year}"
 
-print(f"📦 Loading {INPUT_TABLE} from DuckDB...")
+print(f"📦 Loading {INPUT_TABLE} + closeadj from sep_base...")
 con = duckdb.connect(DB_PATH)
-df = con.execute(f"SELECT * FROM {INPUT_TABLE}").fetchdf()
+
+# Join in closeadj from sep_base
+df = con.execute(f"""
+    SELECT f.*, s.closeadj
+    FROM {INPUT_TABLE} f
+    JOIN sep_base s USING (ticker, date)
+""").fetchdf()
 
 print("🧮 Computing forward returns...")
 
-# Sort by ticker + date
 df = df.sort_values(["ticker", "date"])
-
-# Group and compute future log returns
 df["ret_1d_f"] = df.groupby("ticker")["closeadj"].transform(lambda x: np.log(x.shift(-1) / x))
 df["ret_5d_f"] = df.groupby("ticker")["closeadj"].transform(lambda x: np.log(x.shift(-5) / x))
 df["ret_21d_f"] = df.groupby("ticker")["closeadj"].transform(lambda x: np.log(x.shift(-21) / x))
 
-# Drop rows with NA targets
+df = df.drop(columns=["closeadj"])  # optional: remove to keep feature matrix clean
 df = df.dropna(subset=["ret_1d_f", "ret_5d_f", "ret_21d_f"])
 
-# Save result to DuckDB
+# Save result
 print(f"💾 Saving to {OUTPUT_TABLE}...")
 con.execute(f"DROP TABLE IF EXISTS {OUTPUT_TABLE}")
 con.register("df", df)

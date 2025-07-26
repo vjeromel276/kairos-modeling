@@ -1,0 +1,51 @@
+model: lgbm
+
+targets:
+  - ret_1d_f
+  - ret_5d_f
+  - ret_21d_f
+
+features:
+  - ret_1d
+  - ret_5d
+  - ret_21d
+  - hl_ratio
+  - co_ratio
+  - true_range
+  - range_pct
+  - body_size
+  - upper_wick
+  - lower_wick
+  - candle_range
+  - body_pct_of_range
+  - upper_wick_pct
+  - lower_wick_pct
+  - gap_open
+  - gap_pct
+  - close_zscore_21d
+  - ret_1d_zscore_21d
+  - ret_1d_rank_21d
+  - price_pct_from_rolling_max_21d
+  - mean_reversion_flag
+  - sma_5
+  - sma_21
+  - ema_12
+  - ema_26
+  - price_vs_sma_21
+  - sma_21_slope
+  - macd
+  - macd_signal
+  - macd_hist
+  - dollar_volume
+  - vol_zscore_21d
+  - volume_pct_change_1d
+  - ret_std_5d
+  - ret_std_21d
+  - atr_14d
+
+params:
+  n_estimators: 100
+  learning_rate: 0.05
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
