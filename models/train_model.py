@@ -7,6 +7,8 @@ outputs predictions (with actuals), and computes SHAP values for LightGBM.
 
 import duckdb
 import argparse
+from sklearn.neural_network import MLPRegressor
+from xgboost import XGBRegressor
 import pandas as pd
 import numpy as np
 import yaml
@@ -69,6 +71,10 @@ if model_type == 'ridge':
     base_model = Ridge(**params)
 elif model_type == 'lgbm':
     base_model = LGBMRegressor(**params)
+elif model_type == 'mlp':
+    base_model = MLPRegressor(**params)
+elif model_type == 'xgb':
+    base_model = XGBRegressor(**params)
 else:
     raise ValueError(f"Unsupported model type: {model_type}")
 
