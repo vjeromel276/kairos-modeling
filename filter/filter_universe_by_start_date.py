@@ -19,26 +19,32 @@ con = duckdb.connect(DB_PATH)
 
 print(f"Building midcap_{args.year}_universe using cutoff {CUTOFF_DATE}...")
 
-query = f"""
--- Step 1: Identify tickers in sep_base with data on or before the cutoff
+# Step 1: Get the list of tickers alive by cutoff and in the current midcap universe
+alive_query = f"""
 WITH tickers_alive_by_cutoff AS (
     SELECT DISTINCT ticker
     FROM sep_base
     WHERE date <= DATE '{CUTOFF_DATE}'
 ),
-
--- Step 2: Intersect with the current midcap universe (filtered & vetted)
 filtered_universe AS (
     SELECT DISTINCT ticker
     FROM mid_cap_2025_07_15
 )
-
--- Step 3: Create the new modeling universe
-CREATE OR REPLACE TABLE midcap_{args.year}_universe AS
 SELECT f.ticker
 FROM filtered_universe f
 JOIN tickers_alive_by_cutoff t USING (ticker);
 """
 
-con.execute(query)
-print(f"✅ Saved: midcap_{args.year}_universe in DuckDB ({DB_PATH})")
+# Step 2: Run the query and save as new table
+df = con.execute(alive_query).fetchdf()
+
+# Step 3: Save to DuckDB table
+table_name = f"midcap_{args.year}_universe"
+con.execute(f"DROP TABLE IF EXISTS {table_name}")
+con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
+
+print(f"✅ Saved: {table_name} in DuckDB ({DB_PATH})")
+con.close()
+print(f"✅ {len(df)} tickers in {table_name} universe")
+print(f"✅ Universe created for year {args.year} with cutoff date {CUTOFF_DATE}")
+print("Done.")
