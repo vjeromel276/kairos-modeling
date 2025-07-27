@@ -103,6 +103,10 @@ python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2
 ```
 ### 7. Predict Live
 ```python
+ python scripts/predict_live.py \
+  --model-file models/output/xgb_ret_1d_f_ret_5d_f_ret_21d_f_2008.pkl \
+  --config models/config/xgb_2008.yaml \
+  --year 2008
 ```
 # ✅ After Running
 Output Description
@@ -129,4 +133,5 @@ python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_
 python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
 python scripts/simulate_strategy.py --pred-file models/output/predictions_mlp_2008.csv --tag mlp_v1
 python scripts/simulate_strategy.py --pred-file models/output/predictions_xgb_2008.csv --tag xgb_v1
+ python scripts/predict_live.py --model-file models/output/xgb_ret_1d_f_ret_5d_f_ret_21d_f_2008.pkl --config models/config/xgb_2008.yaml --year 2008
 ```
