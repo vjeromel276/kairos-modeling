@@ -108,6 +108,14 @@ python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2
   --config models/config/xgb_2008.yaml \
   --year 2008
 ```
+### 8. Build Model Ensemble
+```python
+python scripts/build_ensemble_predictions.py --date 2025-07-25
+```
+### 9. Evaluate Live Predictions
+```python
+python scripts/evaluate_live_predictions.py
+```
 # ✅ After Running
 Output Description
 midcap_2008_universe Filtered tickers with coverage
@@ -133,5 +141,8 @@ python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_
 python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
 python scripts/simulate_strategy.py --pred-file models/output/predictions_mlp_2008.csv --tag mlp_v1
 python scripts/simulate_strategy.py --pred-file models/output/predictions_xgb_2008.csv --tag xgb_v1
- python scripts/predict_live.py --model-file models/output/xgb_ret_1d_f_ret_5d_f_ret_21d_f_2008.pkl --config models/config/xgb_2008.yaml --year 2008
+python scripts/predict_live.py --model-file models/output/xgb_ret_1d_f_ret_5d_f_ret_21d_f_2008.pkl --config models/config/xgb_2008.yaml --year 2008
+python scripts/build_ensemble_predictions.py --date 2025-07-25
+python scripts/evaluate_live_predictions.py
+
 ```
