@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-Fills in actual forward returns (1d, 5d, 21d) in live_predictions,
-and logs scoring metrics into live_scores for each model/horizon/date group.
+Evaluate live_predictions using trading-calendar-aware forward returns.
+Fills in ret_{1,5,21}d_f_actual and logs metrics into live_scores.
 """
 
 import duckdb
-from datetime import datetime, timedelta
-import numpy as np
+from datetime import datetime
 
 con = duckdb.connect("data/kairos.duckdb")
 now = datetime.utcnow()
 
-# Ensure score table exists
+# Ensure live_scores table exists
 con.execute("""
 CREATE TABLE IF NOT EXISTS live_scores (
     model TEXT,
@@ -25,50 +24,67 @@ CREATE TABLE IF NOT EXISTS live_scores (
 )
 """)
 
-# Horizon config
+# Horizon mapping
 horizons = {
     "ret_1d_f_actual": 1,
-    "ret_5d_f_actual": 7,
-    "ret_21d_f_actual": 30
+    "ret_5d_f_actual": 5,
+    "ret_21d_f_actual": 21
 }
 
-filled = 0
-for col, delta_days in horizons.items():
-    future_offset = f"DATE_ADD('day', {delta_days}, date)"
-    base_return_expr = f"""
-        log(f.closeadj / t.closeadj)
-        AS {col}
-    """
-
-    # Fill in actuals where they are null and future is available
+# Fill actuals using trading calendar with scalar-safe subquery
+for col, offset in horizons.items():
     con.execute(f"""
+        WITH future_dates AS (
+            SELECT
+                lp.ticker,
+                CAST(lp.date AS DATE) AS prediction_date,
+                tc_future.trading_date AS future_date
+            FROM live_predictions lp
+            JOIN trading_calendar tc_now
+              ON CAST(lp.date AS DATE) = tc_now.trading_date
+            JOIN (
+                SELECT
+                    trading_date,
+                    ROW_NUMBER() OVER (ORDER BY trading_date) AS rn
+                FROM trading_calendar
+            ) tc_indexed
+              ON tc_now.trading_date = tc_indexed.trading_date
+            JOIN (
+                SELECT
+                    trading_date,
+                    ROW_NUMBER() OVER (ORDER BY trading_date) AS rn
+                FROM trading_calendar
+            ) tc_future
+              ON tc_future.rn = tc_indexed.rn + {offset}
+        )
         UPDATE live_predictions
         SET {col} = (
             SELECT log(f.closeadj / t.closeadj)
             FROM sep_base t
             JOIN sep_base f ON f.ticker = t.ticker
+            JOIN future_dates fd ON fd.ticker = t.ticker
             WHERE t.ticker = live_predictions.ticker
-              AND t.date = live_predictions.date
-              AND f.date = DATE_ADD('day', {delta_days}, live_predictions.date)
+              AND CAST(t.date AS DATE) = fd.prediction_date
+              AND CAST(f.date AS DATE) = fd.future_date
+            LIMIT 1
         )
         WHERE {col} IS NULL
-          AND DATE_ADD('day', {delta_days}, date) <= CURRENT_DATE
     """)
-    print(f"✅ Filled available {col} actuals.")
+    print(f"✅ Filled trading-day-aligned {col}.")
 
-# Score each model+horizon group
+# Score directional accuracy + Sharpe
 for horizon in horizons.keys():
     result = con.execute(f"""
         SELECT
             model,
-            date AS prediction_date,
+            CAST(date AS DATE) AS prediction_date,
             COUNT(*) AS n_predictions,
             COUNT({horizon}) AS n_actuals,
-            AVG(SIGN({horizon}) = SIGN(CASE
+            AVG(CAST(SIGN({horizon}) = SIGN(CASE
                 WHEN '{horizon}' = 'ret_1d_f_actual' THEN ret_1d_f_pred
                 WHEN '{horizon}' = 'ret_5d_f_actual' THEN ret_5d_f_pred
                 WHEN '{horizon}' = 'ret_21d_f_actual' THEN ret_21d_f_pred
-            END)) AS directional_accuracy,
+            END) AS DOUBLE)) AS directional_accuracy,
             AVG(CASE
                 WHEN '{horizon}' = 'ret_1d_f_actual' THEN ret_1d_f_pred * {horizon}
                 WHEN '{horizon}' = 'ret_5d_f_actual' THEN ret_5d_f_pred * {horizon}
@@ -76,7 +92,7 @@ for horizon in horizons.keys():
             END) / STDDEV_SAMP({horizon}) AS sharpe
         FROM live_predictions
         WHERE {horizon} IS NOT NULL
-        GROUP BY model, date
+        GROUP BY model, CAST(date AS DATE)
     """).fetchall()
 
     for row in result:
