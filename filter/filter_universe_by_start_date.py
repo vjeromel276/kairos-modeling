@@ -21,18 +21,20 @@ print(f"Building midcap_{args.year}_universe using cutoff {CUTOFF_DATE}...")
 
 # Step 1: Get the list of tickers alive by cutoff and in the current midcap universe
 alive_query = f"""
-WITH tickers_alive_by_cutoff AS (
-    SELECT DISTINCT ticker
-    FROM sep_base
-    WHERE date <= DATE '{CUTOFF_DATE}'
+WITH base_universe AS (
+    SELECT ticker
+    FROM ticker_metadata_view
+    WHERE 
+        scalemarketcap IN ('4 - Mid', '5 - Large', '6 - Mega') AND
+        LOWER(category) LIKE '%common stock%' AND
+        volumeavg1m >= 2_000_000  -- or your preferred ADV threshold
 ),
-filtered_universe AS (
-    SELECT DISTINCT ticker
-    FROM mid_cap_2025_07_15
+tickers_alive_by_cutoff AS (
+    SELECT DISTINCT ticker FROM sep_base WHERE date <= DATE '{CUTOFF_DATE}'
 )
-SELECT f.ticker
-FROM filtered_universe f
-JOIN tickers_alive_by_cutoff t USING (ticker);
+SELECT b.ticker
+FROM base_universe b
+JOIN tickers_alive_by_cutoff t USING (ticker)
 """
 
 # Step 2: Run the query and save as new table

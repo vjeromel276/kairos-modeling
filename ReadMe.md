@@ -64,7 +64,7 @@ This pipeline builds **stable, reproducible, and research-grade predictive model
 python scripts/daily_download.py --date 2025-07-25
 python scripts/merge_daily_download_duck.py --update-golden '/mnt/ssd_quant/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb'  
 ```
-### 1. Filter Modeling Universe by Start Date
+### 1. Filter Modeling Universe by Start Date - updated to use the ticker_metadata_view to pull only mid large and mega cap common stock
 
 ```python
 python filter/filter_universe_by_start_date.py --year 2008
@@ -137,6 +137,8 @@ python features/build_feat_matrix_complete.py --year 2008 --full
 python scripts/generate_targets.py --year 2008
 python models/train_model.py --config models/config/ridge_2008.yaml --year 2008
 python models/train_model.py --config models/config/lgbm_2008.yaml --year 2008
+python models/train_model.py --config models/config/xgb_2008.yaml --year 2008
+python models/train_model.py --config models/config/mlp_2008.yaml --year 2008
 python scripts/simulate_strategy.py --pred-file models/output/predictions_ridge_2008.csv --tag ridge_v1
 python scripts/simulate_strategy.py --pred-file models/output/predictions_lgbm_2008.csv --tag lgbm_final
 python scripts/simulate_strategy.py --pred-file models/output/predictions_mlp_2008.csv --tag mlp_v1
