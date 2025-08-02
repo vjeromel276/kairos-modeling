@@ -77,11 +77,11 @@ python filter/filter_universe_by_start_date.py --year 2014
 ### 3. Build Feature Matrix
 #### Base version (3 features)
 ```python
-python features/build_feat_matrix_complete.py --year 2008
+python features/build_feat_matrix_complete.py --year 1999 --universe midcap_long_history_universe
 ```
 #### Full version (joins all feat\_\* tables)
 ```python
-python features/build_feat_matrix_complete.py --year 2008 --full
+python features/build_feat_matrix_complete.py --year 1999 --universe midcap_long_history_universe --full
 ```
 ### 4. Add Forward Targets
 ```python
@@ -132,8 +132,8 @@ strategy_stats (DuckDB) Logged results: Sharpe, drawdown, etc.
 python scripts/daily_download.py --date 2025-07-25  
 python scripts/merge_daily_download_duck.py --update-golden '/mnt/ssd_quant/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb'
 python filter/filter_universe_by_start_date.py --year 2008
-python refresh_feature_tables.py
-python features/build_feat_matrix_complete.py --year 2008 --full
+python features/refresh_feature_tables.py
+python features/build_feat_matrix_complete.py --year 1999 --universe midcap_long_history_universe --full
 python scripts/generate_targets.py --year 2008
 python models/train_model.py --config models/config/ridge_2008.yaml --year 2008
 python models/train_model.py --config models/config/lgbm_2008.yaml --year 2008

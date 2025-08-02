@@ -32,7 +32,7 @@ WITH base_universe AS (
 tickers_alive_by_cutoff AS (
     SELECT DISTINCT ticker FROM sep_base WHERE date <= DATE '{CUTOFF_DATE}'
 )
-SELECT b.ticker
+SELECT DISTINCT b.ticker
 FROM base_universe b
 JOIN tickers_alive_by_cutoff t USING (ticker)
 """

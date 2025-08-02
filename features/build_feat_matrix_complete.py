@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Memory-efficient feature matrix builder.
-With --full, incrementally joins feat_* tables in DuckDB to avoid RAM overflow.
-Without --full, builds minimal 3-feature matrix in memory.
+Supports specifying a custom universe table.
 """
 
 import duckdb
@@ -11,22 +10,20 @@ import pandas as pd
 import numpy as np
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--year', type=int, required=True, help="Universe year (e.g. 2008, 2014)")
+parser.add_argument('--year', type=int, help="Label year for output table (used in name only)")
+parser.add_argument('--universe', type=str, required=True, help="Universe table name in DuckDB")
 parser.add_argument('--full', action='store_true', help="Join all feat_* tables incrementally in DuckDB")
 args = parser.parse_args()
 
 DB_PATH = "data/kairos.duckdb"
-UNIVERSE_TABLE = f"midcap_{args.year}_universe"
-OUTPUT_TABLE = f"feat_matrix_complete_{args.year}"
+UNIVERSE_TABLE = args.universe
+OUTPUT_TABLE = f"feat_matrix_complete_{args.year or 'custom'}"
 
 con = duckdb.connect(DB_PATH)
 
-print(f"📦 Building feature matrix for {args.year} with {'all features' if args.full else 'base features'}...")
+print(f"📦 Building feature matrix {OUTPUT_TABLE} using universe '{UNIVERSE_TABLE}'")
 
 if args.full:
-    # ----------------------
-    # STEP 1: Create base matrix (ticker/date) from all feat_* sources
-    # ----------------------
     print("🔍 Finding feature tables...")
     all_tables = con.execute("SHOW TABLES").fetchdf()["name"].tolist()
     exclude_prefixes = ("feat_matrix", "feat_targets")
@@ -35,15 +32,12 @@ if args.full:
         if t.startswith("feat_") and not t.startswith(exclude_prefixes)
     ]
 
-
     if not feat_tables:
         raise RuntimeError("❌ No feat_* tables found in DuckDB.")
 
     print(f"🔍 Found feature tables: {feat_tables}")
 
-    # ----------------------
-    # STEP 2: Create base set of ticker + date from first feature table (joined with universe)
-    # ----------------------
+    # Start with first table joined to universe
     first_table = feat_tables[0]
     print(f"📥 Starting with: {first_table}")
 
@@ -57,11 +51,9 @@ if args.full:
     """)
     print(f"✅ Initialized {OUTPUT_TABLE} with {first_table}")
 
-    # ----------------------
-    # STEP 3: Iteratively join each additional feat_* table in DuckDB
-    # ----------------------
+    # Join others
     for t in feat_tables[1:]:
-        print(f"➕ Joining: {t}...")
+        print(f"➕ Joining: {t}")
         con.execute(f"""
             CREATE OR REPLACE TABLE {OUTPUT_TABLE} AS
             SELECT *
@@ -74,10 +66,7 @@ if args.full:
         print(f"✅ Joined: {t}")
 
 else:
-    # ----------------------
-    # BASE MODE: Build minimal 3-feature set in memory
-    # ----------------------
-    print("🔍 Building minimal base feature matrix...")
+    print("🔍 Building minimal base feature matrix from sep_base...")
     df = con.execute(f"""
         SELECT s.*
         FROM sep_base s
@@ -89,7 +78,6 @@ else:
     df["volume_z"] = df.groupby("ticker")["volume"].transform(lambda x: (x - x.mean()) / x.std())
     df["price_norm"] = df["closeadj"] / df.groupby("ticker")["closeadj"].transform("max")
     df = df[["ticker", "date", "log_return", "volume_z", "price_norm"]]
-
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
 
     con.execute(f"DROP TABLE IF EXISTS {OUTPUT_TABLE}")
