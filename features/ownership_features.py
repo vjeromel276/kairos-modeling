@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Build ownership-based features from institutional and insider data (sf3a + sf3b)
+Build ownership-based features from institutional data (sf3a + sf3b)
 
 Features:
 - institutional_ownership_pct
 - institutional_churn_1q
-- insider_buy_sell_ratio
-- insider_net_activity_1m
+- institutional_holder_count
+- institutional_value_held
 """
 
 import duckdb
@@ -14,62 +14,32 @@ import pandas as pd
 import argparse
 
 def compute_ownership_features(con):
-    # Load sf3b (institutional ownership) quarterly
+    # Load sf3a: institutional holdings by ticker per quarter
     inst = con.execute("""
-        SELECT ticker, date, sharesheld, sharesout
-        FROM sf3b
-        WHERE sharesheld IS NOT NULL AND sharesout IS NOT NULL AND sharesout > 0
-        ORDER BY ticker, date
-    """).fetchdf()
-
-    inst["inst_own_pct"] = inst["sharesheld"] / inst["sharesout"]
-    inst["inst_churn_1q"] = inst.groupby("ticker")["inst_own_pct"].diff()
-
-    inst = inst[["ticker", "date", "inst_own_pct", "inst_churn_1q"]]
-
-    # Load sf3a (insider trades), aggregated monthly
-    insider = con.execute("""
-        SELECT ticker, date, shares, type
+        SELECT
+            calendardate AS date,
+            ticker,
+            shrvalue AS inst_value,
+            shrunits AS inst_units,
+            shrholders AS inst_holders
         FROM sf3a
-        WHERE shares IS NOT NULL AND type IN ('Buy', 'Sell')
+        WHERE ticker IS NOT NULL AND shrvalue IS NOT NULL AND shrunits IS NOT NULL
         ORDER BY ticker, date
     """).fetchdf()
 
-    insider["shares"] = insider["shares"].astype(float)
-    insider["buy_shares"] = insider["shares"].where(insider["type"] == "Buy", 0)
-    insider["sell_shares"] = insider["shares"].where(insider["type"] == "Sell", 0)
+    # Compute percent ownership and changes
+    inst = inst.sort_values(["ticker", "date"])
+    inst["inst_value_change"] = inst.groupby("ticker")["inst_value"].pct_change()
+    inst["inst_units_change"] = inst.groupby("ticker")["inst_units"].pct_change()
+    inst["inst_holder_change"] = inst.groupby("ticker")["inst_holders"].diff()
 
-    monthly = (
-        insider.groupby(["ticker", "date"])
-        .agg({
-            "buy_shares": "sum",
-            "sell_shares": "sum"
-        })
-        .reset_index()
-    )
+    # Drop early rows with missing diffs
+    inst = inst.dropna(subset=["inst_value_change", "inst_units_change", "inst_holder_change"])
 
-    monthly["insider_net"] = monthly["buy_shares"] - monthly["sell_shares"]
-    monthly["buy_sell_ratio"] = monthly["buy_shares"] / (monthly["sell_shares"] + 1e-5)
-
-    monthly = monthly.rename(columns={"date": "insider_date"})
-
-    # Join institutional + insider (fuzzy join by month end)
-    merged = pd.merge_asof(
-        inst.sort_values("date"),
-        monthly.sort_values("insider_date"),
-        by="ticker",
-        left_on="date",
-        right_on="insider_date",
-        direction="backward",
-        tolerance=pd.Timedelta(days=30)
-    )
-
-    df = merged.dropna()
-
-    return df[[
+    return inst[[
         "ticker", "date",
-        "inst_own_pct", "inst_churn_1q",
-        "buy_sell_ratio", "insider_net"
+        "inst_value", "inst_units", "inst_holders",
+        "inst_value_change", "inst_units_change", "inst_holder_change"
     ]]
 
 def main():

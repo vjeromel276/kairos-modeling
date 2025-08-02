@@ -15,13 +15,13 @@ import argparse
 
 def compute_quality_features(con):
     df = con.execute("""
-        SELECT ticker, date, ni, equity, revenue, assets, liabilities, ebitda, depamor
+        SELECT ticker, datekey AS date, netinc AS ni, equity, revenue, assets, liabilities, ebitda, depamor
         FROM sf1
         ORDER BY ticker, date
     """).fetchdf()
 
     # Forward-fill per ticker
-    df = df.groupby("ticker").ffill()
+    df = df.set_index(["ticker", "date"]).groupby("ticker").ffill().reset_index()
 
     # Filter invalid rows
     df = df[
