@@ -134,22 +134,21 @@ print(f"✅ Predictions saved to {pred_name}")
 print(f"✅ Metrics saved to {metrics_name}")
 
 # ------------------------
-# SHAP for LightGBM
+# SHAP for LightGBM & XGBoost
 # ------------------------
-if model_type == 'lgbm':
+if model_type in ['lgbm', 'xgb']:
     import shap
     print("🔍 Computing SHAP values...")
 
-    shap_values = []
     for i, est in enumerate(model.estimators_):
         explainer = shap.TreeExplainer(est)
         sv = explainer.shap_values(X_val)
-        shap_values.append(sv)
 
         shap_df = pd.DataFrame({
             'feature': X_val.columns,
             'mean_abs_shap': np.abs(sv).mean(axis=0)
         }).sort_values(by='mean_abs_shap', ascending=False).head(20)
 
-        shap_df.to_csv(f"{OUTPUT_DIR}/shap_{model_type}_{targets[i]}_{args.year}.csv", index=False)
-        print(f"✅ SHAP saved: shap_{model_type}_{targets[i]}_{args.year}.csv")
+        shap_file = f"{OUTPUT_DIR}/shap_{model_type}_{targets[i]}_{args.year}.csv"
+        shap_df.to_csv(shap_file, index=False)
+        print(f"✅ SHAP saved: {os.path.basename(shap_file)}")
