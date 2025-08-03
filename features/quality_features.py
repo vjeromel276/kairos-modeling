@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 """
 Generate quality and efficiency signals from SHARADAR SF1 fundamentals.
-
-Includes:
-- Forward-fill per ticker
-- ROE, margins, accruals, turnover
-- Z-score normalization across universe
+Includes SAFF (Smart Attenuated Forward Fill).
 """
 
 import duckdb
 import pandas as pd
 import numpy as np
 import argparse
+
+def apply_saff(df, value_cols):
+    print("🧠 Applying SAFF to impute missing fundamentals with decay...")
+    median_vals = df.groupby("ticker")[value_cols].transform("median")
+    for col in value_cols:
+        df[f"_isnull_{col}"] = df[col].isna().astype(int)
+
+    df = df.sort_values(["ticker", "date"])
+    for col in value_cols:
+        last_valid = df.groupby("ticker")[col].ffill()
+        gap = df.groupby("ticker")[f"_isnull_{col}"].cumsum()
+        weight = np.exp(-0.05 * gap)  # decay constant
+        df[col] = last_valid * weight + median_vals[col] * (1 - weight)
+
+    df = df.drop(columns=[c for c in df.columns if c.startswith("_isnull_")])
+    return df
 
 def compute_quality_features(con):
     df = con.execute("""
@@ -20,8 +32,8 @@ def compute_quality_features(con):
         ORDER BY ticker, date
     """).fetchdf()
 
-    # Forward-fill per ticker
-    df = df.set_index(["ticker", "date"]).groupby("ticker").ffill().reset_index()
+    value_cols = ["ni", "equity", "revenue", "assets", "liabilities", "ebitda", "depamor"]
+    df = apply_saff(df, value_cols)
 
     # Filter invalid rows
     df = df[
@@ -39,13 +51,11 @@ def compute_quality_features(con):
     df["asset_turnover"] = df["revenue"] / df["assets"]
 
     # Accruals proxy: (Net Income - CFO) / Assets
-    # Approximate CFO as EBITDA - Dep/Amort
     df["cfo"] = df["ebitda"] - df["depamor"]
     df["accruals"] = (df["ni"] - df["cfo"]) / df["assets"]
 
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
 
-    # Z-scores
     def zscore(group, cols):
         for col in cols:
             mu = group[col].mean()

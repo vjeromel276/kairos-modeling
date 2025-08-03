@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
 """
 DEBUG version: Extract valuation features from SHARADAR DAILY table.
-
-Includes detailed logs to trace column loss (esp. 'ticker').
+Includes SAFF (Smart Attenuated Forward Fill) logic.
 """
 
 import duckdb
 import pandas as pd
 import numpy as np
 import argparse
+
+def apply_saff(df, value_cols):
+    print("🧠 Applying SAFF to impute missing fundamentals with decay...")
+    median_vals = df.groupby("ticker")[value_cols].transform("median")
+    for col in value_cols:
+        df[f"_isnull_{col}"] = df[col].isna().astype(int)
+
+    df = df.sort_values(["ticker", "date"])
+    for col in value_cols:
+        last_valid = df.groupby("ticker")[col].ffill()
+        gap = df.groupby("ticker")[f"_isnull_{col}"].cumsum()
+        weight = np.exp(-0.05 * gap)  # 0.05 decay constant (adjustable)
+        df[col] = last_valid * weight + median_vals[col] * (1 - weight)
+
+    df = df.drop(columns=[c for c in df.columns if c.startswith("_isnull_")])
+    return df
 
 def compute_fundamental_features(con):
     print("📥 Loading raw SHARADAR daily fundamental data...")
@@ -20,9 +35,9 @@ def compute_fundamental_features(con):
 
     print("✅ Initial load complete. Columns:", df.columns.tolist())
 
-    # Forward-fill per ticker
-    df = df.set_index(["ticker", "date"]).groupby("ticker").ffill().reset_index()
-    print("✅ Forward-fill complete. Columns now:", df.columns.tolist())
+    value_cols = ["marketcap", "ev", "evebit", "evebitda", "pe", "pb", "ps"]
+    df = apply_saff(df, value_cols)
+    print("✅ SAFF fill complete.")
 
     # Filtering
     df = df[
@@ -35,7 +50,6 @@ def compute_fundamental_features(con):
         (df["ev"] > 0)
     ]
     print(f"✅ Filtering complete: {len(df):,} rows remain.")
-    print("Columns post-filtering:", df.columns.tolist())
 
     # Feature engineering
     df["log_marketcap"] = np.log(df["marketcap"])
@@ -51,44 +65,21 @@ def compute_fundamental_features(con):
 
     z_cols = ["log_marketcap", "pe", "pb", "ps", "ev_to_ebitda", "ev_to_ebit", "value_composite"]
 
-    # Verify required columns
-    if "ticker" not in df.columns or "date" not in df.columns:
-        raise ValueError("❌ 'ticker' or 'date' missing before z-scoring!")
-
     print(f"🧪 Starting per-date z-score computation across {df['date'].nunique()} dates...")
 
     z_dfs = []
     for i, (date, group) in enumerate(df.groupby("date"), 1):
-        if "ticker" not in group.columns:
-            print(f"❌ Group on {date} missing 'ticker'. Skipping.")
-            continue
-
         g = group.copy()
         for col in z_cols:
             mu = g[col].mean()
             std = g[col].std()
             g[f"{col}_z"] = (g[col] - mu) / std if std else np.nan
-
-        if i % 250 == 0 or i == 1:
-            print(f"  ✔ Processed date: {date} | rows: {len(g)} | cols: {g.columns.tolist()}")
         z_dfs.append(g)
 
     df = pd.concat(z_dfs, ignore_index=True)
-    print("✅ Z-scoring complete. Final frame shape:", df.shape)
-    print("Final columns:", df.columns.tolist())
-
-    if "ticker" not in df.columns:
-        raise ValueError("🔥 After concat, 'ticker' is missing!")
-
     df = df.dropna()
-    print(f"✅ Final dropna() complete. {len(df):,} rows ready.")
 
-    # Output columns
-    cols = ["ticker", "date"] + z_cols + [f"{col}_z" for col in z_cols]
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise KeyError(f"❌ Missing expected columns: {missing}")
-
+    cols = ["ticker", "date"] + z_cols + [f"{c}_z" for c in z_cols]
     return df[cols]
 
 def main():
