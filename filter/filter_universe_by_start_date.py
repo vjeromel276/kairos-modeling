@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+filter_universe_by_start_date.py
+
 Filter tickers from mid_cap_2025_07_15 that were active by a given start date.
 Creates a new universe table: midcap_<year>_universe
 """

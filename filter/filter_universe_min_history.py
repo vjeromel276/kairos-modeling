@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+filter_universe_min_history.py
+
 Filter tickers with sufficient trading history that meet mid/large/mega cap criteria.
 Creates a new universe table: midcap_long_history_universe
 """
