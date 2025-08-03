@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+features/refresh_feature_tables.py
+
 Runs all available feature engineering scripts to refresh feat_* tables in DuckDB.
 Scalable: just add more scripts to the list below.
 """
