@@ -24,7 +24,7 @@ import pandas as pd
 import argparse
 
 def compute_price_action_features(con):
-    df = con.execute("SELECT ticker, date, open, high, low, close FROM sep_base ORDER BY ticker, date").fetchdf()
+    df = con.execute("SELECT ticker, date, open, high, low, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
 
     # Compute returns
     df["ret_1d"] = df.groupby("ticker")["close"].pct_change()

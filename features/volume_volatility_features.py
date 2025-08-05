@@ -1,7 +1,7 @@
 """
 volume_volatility_features.py
 
-Computes volume and volatility-based features from sep_base table in DuckDB.
+Computes volume and volatility-based features from sep_base_common table in DuckDB.
 
 Features:
 - Volume z-score (21d)
@@ -11,7 +11,7 @@ Features:
 - Average True Range (ATR 14d)
 
 Input:
-    DuckDB table: sep_base
+    DuckDB table: sep_base_common
 
 Output:
     DuckDB table: feat_volume_volatility
@@ -25,7 +25,7 @@ import pandas as pd
 import argparse
 
 def compute_volume_vol_features(con):
-    df = con.execute("SELECT ticker, date, close, high, low, volume FROM sep_base ORDER BY ticker, date").fetchdf()
+    df = con.execute("SELECT ticker, date, close, high, low, volume FROM sep_base_common ORDER BY ticker, date").fetchdf()
 
     # Dollar volume
     df["dollar_volume"] = df["close"] * df["volume"]

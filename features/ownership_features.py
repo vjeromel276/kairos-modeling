@@ -36,7 +36,7 @@ def compute_ownership_features(con):
     # 1) build full daily grid
     calendar = con.execute("""
       SELECT ticker, date
-      FROM sep_base
+      FROM sep_base_common
       WHERE ticker IS NOT NULL
     """).fetchdf()
 

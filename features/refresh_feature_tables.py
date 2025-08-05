@@ -15,7 +15,7 @@ FEATURE_SCRIPTS = [
     "features/statistical_features.py",
     "features/trend_features.py",
     "features/volume_volatility_features.py",
-    "features/fundamental_features.py",
+    # "features/fundamental_features.py",
     "features/ownership_features.py",
     "features/quality_features.py",
     # "features/analyst_features.py",

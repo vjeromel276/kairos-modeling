@@ -23,7 +23,7 @@ import pandas as pd
 import argparse
 
 def compute_price_shape_features(con):
-    df = con.execute("SELECT ticker, date, open, high, low, close FROM sep_base ORDER BY ticker, date").fetchdf()
+    df = con.execute("SELECT ticker, date, open, high, low, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
 
     # Candlestick components
     df["body_size"] = (df["close"] - df["open"]).abs()

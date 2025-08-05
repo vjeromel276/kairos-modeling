@@ -26,7 +26,7 @@ import numpy as np
 import argparse
 
 def compute_statistical_features(con):
-    df = con.execute("SELECT ticker, date, close FROM sep_base ORDER BY ticker, date").fetchdf()
+    df = con.execute("SELECT ticker, date, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
     df["ret_1d"] = df.groupby("ticker")["close"].pct_change()
 
     def compute_group_stats(group):
