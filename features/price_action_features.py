@@ -49,7 +49,7 @@ def compute_price_action_features(con):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", required=True, help="Path to DuckDB database")
+    parser.add_argument("--db", required=False, default="data/kairos.duckdb", help="Path to DuckDB database")
     args = parser.parse_args()
 
     con = duckdb.connect(args.db)
