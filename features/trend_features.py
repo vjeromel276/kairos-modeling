@@ -13,7 +13,7 @@ Features:
 - MACD, MACD signal, MACD histogram
 
 Input:
-    DuckDB table: sep_base
+    DuckDB table: sep_base_common
 
 Output:
     DuckDB table: feat_trend
@@ -29,7 +29,7 @@ import argparse
 from pathlib import Path
 
 def compute_trend_features(con):
-    df = con.execute("SELECT ticker, date, close FROM sep_base ORDER BY ticker, date").fetchdf()
+    df = con.execute("SELECT ticker, date, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
 
     df["sma_5"] = df.groupby("ticker")["close"].transform(lambda x: x.rolling(5).mean())
     df["sma_21"] = df.groupby("ticker")["close"].transform(lambda x: x.rolling(21).mean())

@@ -1,5 +1,5 @@
 # technical_features.py
-# Computes common technical indicators from sep_base
+# Computes common technical indicators from sep_base_common
 
 import argparse
 import duckdb
@@ -9,7 +9,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Build technical indicators features")
     parser.add_argument(
         "--db-path", default="data/kairos.duckdb",
-        help="Path to DuckDB file containing sep_base"
+        help="Path to DuckDB file containing sep_base_common"
     )
     return parser.parse_args()
 
@@ -69,7 +69,7 @@ def main():
             -- Stochastic highest high / lowest low
             MAX(high) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS high_14,
             MIN(low)  OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS low_14
-        FROM sep_base
+        FROM sep_base_common
         WINDOW w AS (PARTITION BY ticker ORDER BY date)
     ) sub;
     """)

@@ -11,7 +11,7 @@ def parse_args():
     )
     parser.add_argument(
         "--db-path", default="data/kairos.duckdb",
-        help="Path to DuckDB file containing sep_base and metrics tables"
+        help="Path to DuckDB file containing sep_base_common and metrics tables"
     )
     return parser.parse_args()
 
@@ -41,7 +41,7 @@ def main():
         (LAST_VALUE(m.eps) OVER w)
           / NULLIF(LAG(LAST_VALUE(m.eps) OVER w, 4) OVER (PARTITION BY m.ticker ORDER BY s.date),0) - 1
           AS eps_yoy
-      FROM sep_base s
+      FROM sep_base_common s
       LEFT JOIN sharadar_metrics m
         ON s.ticker = m.ticker
        AND m.date <= s.date
