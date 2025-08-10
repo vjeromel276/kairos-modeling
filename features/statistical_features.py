@@ -1,81 +1,109 @@
+# features/statistical_features.py
 """
-statistical_features.py
-
-Computes z-score and percentile-based indicators to assess price stretch,
-statistical outliers, and mean reversion potential.
+Computes statistical stretch/mean-reversion features from sep_base_common
+with full coverage (no NULLs).
 
 Features:
-- Z-scores of close price and returns
-- Return percentile rank vs rolling window
-- Price distance from rolling max
-- Simple mean-reversion flag
+- close_zscore_21d: (close - mean_21) / std_21 with expanding fallbacks
+- ret_1d_zscore_21d: ret_1d / std_21(ret_1d) with expanding fallback
+- ret_1d_rank_21d: fast approximation via logistic CDF of z-score (0..1)
+- price_pct_from_rolling_max_21d: (close - rolling_max_21) / rolling_max_21
+- mean_reversion_flag: 1 if close_zscore_21d < -2.0 else 0
 
-Input:
-    DuckDB table: sep_base_common
-
-Output:
-    DuckDB table: feat_stat
-
-To run:
-    python scripts/features/statistical_features.py --db data/kairos.duckdb
+Run:
+  python features/statistical_features.py --db-path data/kairos.duckdb
 """
-
-import duckdb
-import pandas as pd
-import numpy as np
 import argparse
+import duckdb
 
-def compute_statistical_features(con):
-    df = con.execute("SELECT ticker, date, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
-    df["ret_1d"] = df.groupby("ticker")["close"].pct_change()
-
-    def compute_group_stats(group):
-        group["close_mean_21d"] = group["close"].rolling(21).mean()
-        group["close_std_21d"] = group["close"].rolling(21).std()
-        group["ret_1d_std_21d"] = group["ret_1d"].rolling(21).std()
-        group["rolling_max_21d"] = group["close"].rolling(21).max()
-        return group
-
-    df = df.groupby("ticker", group_keys=False).apply(compute_group_stats)
-
-    df["close_zscore_21d"] = (df["close"] - df["close_mean_21d"]) / df["close_std_21d"]
-    df["ret_1d_zscore_21d"] = df["ret_1d"] / df["ret_1d_std_21d"]
-
-    def rolling_percentile_rank(x):
-        temp = x.argsort()
-        ranks = temp.argsort()
-        return ranks[-1] / (len(x) - 1) if len(x) > 1 else 0.5
-
-    df["ret_1d_rank_21d"] = (
-        df.groupby("ticker")["ret_1d"]
-        .transform(lambda x: x.rolling(21).apply(rolling_percentile_rank, raw=True))
-    )
-
-    df["price_pct_from_rolling_max_21d"] = (
-        (df["close"] - df["rolling_max_21d"]) / df["rolling_max_21d"]
-    )
-
-    df["mean_reversion_flag"] = (df["close_zscore_21d"] < -2.0).astype(int)
-
-    df = df.dropna()
-
-    return df[[
-        "ticker", "date",
-        "close_zscore_21d", "ret_1d_zscore_21d", "ret_1d_rank_21d",
-        "price_pct_from_rolling_max_21d", "mean_reversion_flag"
-    ]]
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--db-path", default="data/kairos.duckdb",
+                   help="Path to DuckDB database")
+    return p.parse_args()
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--db", required=False, default="data/kairos.duckdb", help="Path to DuckDB database")
-    args = parser.parse_args()
+    args = parse_args()
+    con = duckdb.connect(args.db_path)
 
-    con = duckdb.connect(args.db)
-    con.execute("DROP TABLE IF EXISTS feat_stat")
+    con.execute("""
+    CREATE OR REPLACE TABLE feat_stat AS
+    WITH base AS (
+      SELECT
+        ticker, date, close,
+        LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS close_lag1
+      FROM sep_base_common
+    ),
+    rets AS (
+      SELECT
+        *,
+        CASE
+          WHEN close_lag1 IS NULL OR close_lag1 = 0 THEN 0
+          ELSE (close / close_lag1) - 1
+        END AS ret_1d
+      FROM base
+    ),
+    roll AS (
+      SELECT
+        *,
+        -- rolling 21 (rows 20 preceding) + expanding fallbacks
+        AVG(close)   OVER (PARTITION BY ticker ORDER BY date
+                           ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS mean21_close,
+        STDDEV(close) OVER (PARTITION BY ticker ORDER BY date
+                            ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS std21_close,
+        AVG(close)   OVER (PARTITION BY ticker ORDER BY date
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS mean_exp_close,
+        STDDEV(close) OVER (PARTITION BY ticker ORDER BY date
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS std_exp_close,
 
-    df_stat = compute_statistical_features(con)
-    con.execute("CREATE TABLE feat_stat AS SELECT * FROM df_stat")
-    print(f"✅ Saved {len(df_stat):,} statistical features to 'feat_stat' table in {args.db}")
+        STDDEV(ret_1d) OVER (PARTITION BY ticker ORDER BY date
+                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS std21_ret,
+        STDDEV(ret_1d) OVER (PARTITION BY ticker ORDER BY date
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS std_exp_ret,
+
+        MAX(close) OVER (PARTITION BY ticker ORDER BY date
+                         ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS max21_close,
+        MAX(close) OVER (PARTITION BY ticker ORDER BY date
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS max_exp_close
+      FROM rets
+    ),
+    eff AS (
+      SELECT
+        *,
+        -- effective moments with safe epsilons (never NULL/zero)
+        COALESCE(mean21_close, mean_exp_close) AS mean_close_eff,
+        COALESCE(NULLIF(std21_close, 0), NULLIF(std_exp_close, 0), 1e-12) AS std_close_eff,
+        COALESCE(NULLIF(std21_ret, 0),  NULLIF(std_exp_ret, 0),  1e-12)   AS std_ret_eff,
+        COALESCE(max21_close, max_exp_close, close) AS max_close_eff
+      FROM roll
+    )
+    SELECT
+      ticker,
+      date,
+
+      -- z-score of price
+      (close - mean_close_eff) / std_close_eff AS close_zscore_21d,
+
+      -- z-score of 1-day return
+      ret_1d / std_ret_eff AS ret_1d_zscore_21d,
+
+      -- fast rolling percentile proxy via logistic CDF of z-score
+      1.0 / (1.0 + EXP(-1.702 * (ret_1d / std_ret_eff))) AS ret_1d_rank_21d,
+
+      -- distance from rolling max
+      CASE
+        WHEN max_close_eff = 0 THEN 0
+        ELSE (close - max_close_eff) / max_close_eff
+      END AS price_pct_from_rolling_max_21d,
+
+      -- simple mean reversion flag
+      CASE WHEN (close - mean_close_eff) / std_close_eff < -2.0 THEN 1 ELSE 0 END AS mean_reversion_flag
+
+    FROM eff;
+    """)
+
+    con.close()
+    print("✅ feat_stat built with full coverage.")
 
 if __name__ == "__main__":
     main()

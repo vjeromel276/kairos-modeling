@@ -1,67 +1,65 @@
+# features/price_shape_features.py
 """
-price_shape_features.py
-
-Extracts candlestick shape and gap-related features from OHLCV data in DuckDB.
+Extract candlestick shape & gap features from sep_base_common with full coverage.
 
 Features:
-- Candle body, wick sizes
-- Candle body and wick % of total range
-- Gap up/down (absolute and %)
+- body_size, upper_wick, lower_wick, candle_range
+- body_pct_of_range, upper_wick_pct, lower_wick_pct
+- gap_open, gap_pct
 
-Input:
-    DuckDB table: sep_base_common
-
-Output:
-    DuckDB table: feat_price_shape
-
-To run:
-    python scripts/features/price_shape_features.py --db data/kairos.duckdb
+Run:
+  python features/price_shape_features.py --db-path data/kairos.duckdb
 """
-
-import duckdb
-import pandas as pd
 import argparse
+import duckdb
 
-def compute_price_shape_features(con):
-    df = con.execute("SELECT ticker, date, open, high, low, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
-
-    # Candlestick components
-    df["body_size"] = (df["close"] - df["open"]).abs()
-    df["upper_wick"] = df["high"] - df[["open", "close"]].max(axis=1)
-    df["lower_wick"] = df[["open", "close"]].min(axis=1) - df["low"]
-    df["candle_range"] = df["high"] - df["low"]
-
-    # Ratios
-    df["body_pct_of_range"] = df["body_size"] / df["candle_range"]
-    df["upper_wick_pct"] = df["upper_wick"] / df["candle_range"]
-    df["lower_wick_pct"] = df["lower_wick"] / df["candle_range"]
-
-    # Gap features
-    df["prev_close"] = df.groupby("ticker")["close"].shift(1)
-    df["gap_open"] = df["open"] - df["prev_close"]
-    df["gap_pct"] = df["gap_open"] / df["prev_close"]
-
-    df = df.dropna()
-
-    return df[[
-        "ticker", "date",
-        "body_size", "upper_wick", "lower_wick", "candle_range",
-        "body_pct_of_range", "upper_wick_pct", "lower_wick_pct",
-        "gap_open", "gap_pct"
-    ]]
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--db-path", default="data/kairos.duckdb",
+                   help="Path to DuckDB database")
+    return p.parse_args()
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--db", required=False, default="data/kairos.duckdb", help="Path to DuckDB database")
-    args = parser.parse_args()
+    args = parse_args()
+    con = duckdb.connect(args.db_path)
 
-    con = duckdb.connect(args.db)
-    con.execute("DROP TABLE IF EXISTS feat_price_shape")
+    con.execute("""
+    CREATE OR REPLACE TABLE feat_price_shape AS
+    WITH base AS (
+      SELECT
+        ticker, date, open, high, low, close,
+        LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS prev_close
+      FROM sep_base_common
+    ),
+    calc AS (
+      SELECT
+        *,
+        ABS(close - open) AS body_size,
+        GREATEST(high - GREATEST(open, close), 0) AS upper_wick,
+        GREATEST(LEAST(open, close) - low, 0)     AS lower_wick,
+        (high - low) AS candle_range
+      FROM base
+    )
+    SELECT
+      ticker,
+      date,
+      body_size,
+      upper_wick,
+      lower_wick,
+      candle_range,
+      CASE WHEN candle_range = 0 THEN 0 ELSE body_size  / candle_range END AS body_pct_of_range,
+      CASE WHEN candle_range = 0 THEN 0 ELSE upper_wick / candle_range END AS upper_wick_pct,
+      CASE WHEN candle_range = 0 THEN 0 ELSE lower_wick / candle_range END AS lower_wick_pct,
+      COALESCE(open - prev_close, 0) AS gap_open,
+      CASE
+        WHEN prev_close IS NULL OR prev_close = 0 THEN 0
+        ELSE (open - prev_close) / prev_close
+      END AS gap_pct
+    FROM calc;
+    """)
 
-    df_feat = compute_price_shape_features(con)
-    con.execute("CREATE TABLE feat_price_shape AS SELECT * FROM df_feat")
-
-    print(f"✅ Saved {len(df_feat):,} rows to feat_price_shape table in {args.db}")
+    con.close()
+    print("✅ feat_price_shape built with full coverage.")
 
 if __name__ == "__main__":
     main()

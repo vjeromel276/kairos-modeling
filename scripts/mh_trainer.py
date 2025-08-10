@@ -39,26 +39,36 @@ def parse_args():
         "--model-out", default="models/mh_model_final.pkl",
         help="Path to save final retrained model"
     )
+    parser.add_argument(
+        "--fold-start", type=str, default=None,
+        help="Earliest end_date to consider for folds (YYYY-MM-DD)."
+    )
     return parser.parse_args()
 
 
-def get_fold_dates(conn, table: str, freq: str, window_size: int, max_horizon: int):
+def get_fold_dates(conn, table: str, freq: str, window_size: int, max_horizon: int, fold_start: str | None = None):
     """
     Generate fold end dates by snapping boundaries (e.g. quarter-ends) to actual trading days.
     """
     df = conn.execute(f"""
         SELECT DISTINCT CAST(end_date AS DATE) AS d
         FROM {table}
-    """
-    ).df().sort_values("d")
+    """).df().sort_values("d")
     all_dates = df["d"].reset_index(drop=True)
 
     # first valid date index to ensure look-back
     first_idx = window_size + max_horizon - 1
     first_fold = all_dates.iloc[first_idx]
 
-    # theoretical boundaries
-    boundaries = pd.date_range(start=first_fold, end=all_dates.iloc[-1], freq=freq)
+    # effective start = max(first_fold, fold_start if provided)
+    effective_start = first_fold
+    if fold_start:
+        fs = pd.Timestamp(fold_start)
+        if fs > effective_start:
+            effective_start = fs
+
+    # theoretical boundaries from effective_start
+    boundaries = pd.date_range(start=effective_start, end=all_dates.iloc[-1], freq=freq)
 
     # snap to actual trading days <= boundary
     fold_dates = []
@@ -72,7 +82,10 @@ def get_fold_dates(conn, table: str, freq: str, window_size: int, max_horizon: i
     if fold_dates[-1] != last:
         fold_dates.append(last)
 
+    # safety: keep only folds >= effective_start
+    fold_dates = [d for d in fold_dates if d >= effective_start]
     return fold_dates
+
 
 
 def load_windows(conn, table: str, end_date_max, end_date_min=None):
@@ -125,11 +138,14 @@ def main():
         table="mh_windows",
         freq=args.freq,
         window_size=args.window_size,
-        max_horizon=args.max_horizon
+        max_horizon=args.max_horizon,
+        fold_start=args.fold_start
     )
+    print("Fold start:", args.fold_start or "(auto)")
     print("Fold dates:")
     for d in folds:
         print("  ", d)
+
 
     # walk-forward training and validation
     for i in range(len(folds)-1):

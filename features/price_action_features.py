@@ -1,64 +1,70 @@
+# features/price_action_features.py
 """
-price_action_features.py
-
-Generates price action and momentum-based features from the base SEP OHLCV dataset.
+Generates price action and momentum-based features from sep_base_common
+with full coverage (no NULLs, no dropped rows).
 
 Features:
-- Daily returns
-- Rolling N-day returns (e.g., 5d, 21d)
-- Price ratios (high/low, close/open)
-- True range and price range percentage
+- ret_1d, ret_5d, ret_21d  (backward-looking simple returns)
+- hl_ratio, co_ratio
+- true_range (high - low)
+- range_pct  ((high - low) / open)
 
-Input:
-    DuckDB table: sep_base_common
-
-Output:
-    DuckDB table: feat_price_action
-
-To run:
-    python scripts/features/price_action_features.py --db data/kairos.duckdb
+Run:
+  python features/price_action_features.py --db-path data/kairos.duckdb
 """
-
-import duckdb
-import pandas as pd
 import argparse
+import duckdb
 
-def compute_price_action_features(con):
-    df = con.execute("SELECT ticker, date, open, high, low, close FROM sep_base_common ORDER BY ticker, date").fetchdf()
-
-    # Compute returns
-    df["ret_1d"] = df.groupby("ticker")["close"].pct_change()
-    df["ret_5d"] = df.groupby("ticker")["close"].pct_change(5)
-    df["ret_21d"] = df.groupby("ticker")["close"].pct_change(21)
-
-    # Price ratios
-    df["hl_ratio"] = df["high"] / df["low"]
-    df["co_ratio"] = df["close"] / df["open"]
-
-    # True range and range percentage
-    df["true_range"] = df["high"] - df["low"]
-    df["range_pct"] = (df["high"] - df["low"]) / df["open"]
-
-    df = df.dropna()
-
-    return df[[
-        "ticker", "date",
-        "ret_1d", "ret_5d", "ret_21d",
-        "hl_ratio", "co_ratio", "true_range", "range_pct"
-    ]]
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--db-path", default="data/kairos.duckdb",
+                   help="Path to DuckDB database")
+    return p.parse_args()
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--db", required=False, default="data/kairos.duckdb", help="Path to DuckDB database")
-    args = parser.parse_args()
+    args = parse_args()
+    con = duckdb.connect(args.db_path)
 
-    con = duckdb.connect(args.db)
-    con.execute("DROP TABLE IF EXISTS feat_price_action")
+    con.execute("""
+    CREATE OR REPLACE TABLE feat_price_action AS
+    WITH base AS (
+      SELECT
+        ticker, date, open, high, low, close,
+        LAG(close, 1)  OVER w AS close_lag1,
+        LAG(close, 5)  OVER w AS close_lag5,
+        LAG(close, 21) OVER w AS close_lag21
+      FROM sep_base_common
+      WINDOW w AS (PARTITION BY ticker ORDER BY date)
+    ),
+    rets AS (
+      SELECT
+        *,
+        -- Simple returns with neutral fallback (0) when lookback is missing/0
+        CASE WHEN close_lag1  IS NULL OR close_lag1  = 0 THEN 0
+             ELSE (close / close_lag1)  - 1 END AS ret_1d,
+        CASE WHEN close_lag5  IS NULL OR close_lag5  = 0 THEN 0
+             ELSE (close / close_lag5)  - 1 END AS ret_5d,
+        CASE WHEN close_lag21 IS NULL OR close_lag21 = 0 THEN 0
+             ELSE (close / close_lag21) - 1 END AS ret_21d
+      FROM base
+    )
+    SELECT
+      ticker,
+      date,
+      ret_1d,
+      ret_5d,
+      ret_21d,
+      -- Ratios with safe divides
+      CASE WHEN low  = 0 THEN 1 ELSE high / low  END AS hl_ratio,
+      CASE WHEN open = 0 THEN 1 ELSE close / open END AS co_ratio,
+      -- Ranges
+      (high - low)                                           AS true_range,
+      CASE WHEN open = 0 THEN 0 ELSE (high - low) / open END AS range_pct
+    FROM rets;
+    """)
 
-    df_feat = compute_price_action_features(con)
-    con.execute("CREATE TABLE feat_price_action AS SELECT * FROM df_feat")
-
-    print(f"✅ Saved {len(df_feat):,} rows to feat_price_action table in {args.db}")
+    con.close()
+    print("✅ feat_price_action built with full coverage.")
 
 if __name__ == "__main__":
     main()
