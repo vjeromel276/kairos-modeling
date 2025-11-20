@@ -1,24 +1,67 @@
 name: kairos-gpu
 channels:
-  - nvidia
   - pytorch
+  - nvidia
   - conda-forge
 dependencies:
-  - python=3.10
-  - numpy
+  # Python 3.11 for better compatibility (3.13 too new for some packages)
+  - python=3.11
+  
+  # Core data science stack
+  - numpy<2.0  # Keep numpy 1.x for better compatibility
   - pandas
   - scikit-learn
+  - matplotlib
+  - seaborn
+  
+  # Time series specific
+  - statsmodels
+  - prophet
+  
+  # Gradient boosting
   - lightgbm
-  - joblib
-  - duckdb
+  - xgboost
+  
+  # Fast data processing
   - polars
-  - pytorch
-  - torchvision
-  - torchaudio
-  - pytorch-cuda=12.1
-  - tensorflow
+  - duckdb
+  
+  # Utilities
+  - joblib
+  - tqdm
+  
+  # PyTorch with CUDA 12.1 (your driver supports this)
+  - pytorch::pytorch
+  - pytorch::torchvision  
+  - pytorch::torchaudio
+  - pytorch::pytorch-cuda=12.1
+  
+  # CUDA toolkit components
+  - nvidia::cuda-toolkit=12.1
+  
+  # Jupyter for experimentation
+  - jupyter
+  - ipykernel
+  
+  # Pip for additional packages
   - pip
   - pip:
+      # Experiment tracking
       - wandb
+      
+      # Hyperparameter optimization  
       - optuna
+      
+      # Efficient attention for transformers
       - xformers
+      
+      # Time series specific
+      - sktime
+      - tslearn
+      
+      # Financial data
+      - yfinance
+      - pandas-ta
+      
+      # Nicer progress bars
+      - rich
