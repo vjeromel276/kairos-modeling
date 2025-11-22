@@ -26,7 +26,8 @@ ACADEMIC_TABLES = [
     "feat_trend",
     "feat_volume_volatility",
     "feat_targets",
-    "feat_composite_academic"
+    "feat_composite_academic",
+    "feat_institutional_academic",
 ]
 
 def main():
