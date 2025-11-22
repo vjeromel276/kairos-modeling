@@ -28,6 +28,8 @@ ACADEMIC_TABLES = [
     "feat_targets",
     "feat_composite_academic",
     "feat_institutional_academic",
+    "feat_composite_long",
+    "feat_composite_v3", 
 ]
 
 def main():
