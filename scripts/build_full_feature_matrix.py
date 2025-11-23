@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
-build_full_feature_matrix.py — FINAL ACADEMIC VERSION
+build_full_feature_matrix.py – RAM-safe, DuckDB-only, partitioned output (overwrite-safe)
 
-Uses a temp table + iterative LEFT JOIN strategy
-to avoid deep nested SELECT statements that break DuckDB's SQL parser.
+Builds the full academic feature matrix by iteratively LEFT JOINing
+feat_* tables onto the base (ticker, date) from sep_base_academic,
+restricted to your Option B universe.
 
-Only includes:
-    feat_price_action
-    feat_price_shape
-    feat_stat
-    feat_trend
-    feat_volume_volatility
-    feat_targets
+Outputs:
+    1. DuckDB table: feat_matrix
+    2. Partitioned Parquet dataset:
+       scripts/feature_matrices/<date>_academic_matrix/
+       partitioned by ticker
 """
 
 import duckdb
 import pandas as pd
 import argparse
+import logging
 from pathlib import Path
+import shutil  # For directory removal
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+# Academic feature tables to include
 ACADEMIC_TABLES = [
     "feat_price_action",
     "feat_price_shape",
@@ -29,39 +38,42 @@ ACADEMIC_TABLES = [
     "feat_composite_academic",
     "feat_institutional_academic",
     "feat_composite_long",
-    "feat_composite_v3", 
+    "feat_composite_v3",
+    "feat_composite_v4",
 ]
 
+
 def main():
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", required=True)
-    parser.add_argument("--date", required=True)
-    parser.add_argument("--universe", required=True)
+    parser.add_argument("--db", required=True, help="Path to DuckDB file")
+    parser.add_argument("--date", required=True, help="Snapshot date (YYYY-MM-DD)")
+    parser.add_argument("--universe", required=True, help="Ticker universe CSV")
     args = parser.parse_args()
 
     con = duckdb.connect(args.db)
 
-    print(f"📂 Loading universe CSV: {args.universe}")
+    # ------------------------------------------------------------------
+    # Load universe CSV (small) and register as temp table
+    # ------------------------------------------------------------------
+    logger.info(f"📂 Loading universe CSV: {args.universe}")
     universe_df = pd.read_csv(args.universe)
     con.register("universe_df", universe_df)
 
-    # ------------------------------------------------------------------
-    # Validate required tables
-    # ------------------------------------------------------------------
+    # Validate that required feat_* tables exist
     existing = set(con.execute("SHOW TABLES").fetchdf()["name"].tolist())
-    for t in ACADEMIC_TABLES:
-        if t not in existing:
-            raise RuntimeError(f"❌ Missing academic table: {t}")
+    missing = [t for t in ACADEMIC_TABLES if t not in existing]
+    if missing:
+        raise RuntimeError(f"❌ Missing required feature tables: {missing}")
 
-    print("\n🔍 Using academic feature tables:")
+    logger.info("\n🔍 Using academic feature tables:")
     for t in ACADEMIC_TABLES:
-        print(f"   • {t}")
+        logger.info(f"   • {t}")
 
     # ------------------------------------------------------------------
-    # STEP 1: Create base temp table
+    # STEP 1: Build base temp table __feat_base (ticker, date)
     # ------------------------------------------------------------------
-    print("\n🔧 Building temp base academic table...")
-
+    logger.info("\n🔧 Building temp base academic table...")
     con.execute("DROP TABLE IF EXISTS __feat_base")
 
     con.execute("""
@@ -74,56 +86,80 @@ def main():
         ORDER BY s.ticker, s.date
     """)
 
-    # Confirm row count
-    rows = con.execute("SELECT COUNT(*) FROM __feat_base").fetchone()[0]
-    print(f"✔ Base contains {rows:,} rows")
+    base_rows = con.execute("SELECT COUNT(*) FROM __feat_base").fetchone()[0]
+    logger.info(f"✔ Base contains {base_rows:,} rows")
 
     # ------------------------------------------------------------------
-    # STEP 2: Iteratively LEFT JOIN each academic feature table
+    # STEP 2: Iteratively LEFT JOIN each feature table (inside DuckDB)
     # ------------------------------------------------------------------
-    print("\n🔧 Iteratively joining feature tables...")
+    logger.info("\n🔧 Iteratively joining feature tables...")
 
     for t in ACADEMIC_TABLES:
+        logger.info(f"   → Joining {t} ...")
 
-        print(f"   → Joining {t} ...")
+        cols_df = con.execute(f"PRAGMA table_info('{t}')").fetchdf()
+        all_cols = cols_df["name"].tolist()
 
-        # Get column names, excluding ticker/date
-        cols = con.execute(f"PRAGMA table_info('{t}')").fetchdf()["name"].tolist()
-        feat_cols = [c for c in cols if c not in ("ticker", "date")]
+        # Exclude join keys
+        feat_cols = [c for c in all_cols if c not in ("ticker", "date")]
+        if not feat_cols:
+            continue
 
-        # Build left join
-        select_cols = ", ".join(feat_cols) if feat_cols else ""
+        select_cols = ", ".join([f"f.{c}" for c in feat_cols])
 
         con.execute(f"""
             CREATE OR REPLACE TABLE __feat_base AS
             SELECT
                 b.*,
-                {', '.join([f'f.{c}' for c in feat_cols])}
+                {select_cols}
             FROM __feat_base b
             LEFT JOIN {t} f
             USING (ticker, date)
         """)
 
     # ------------------------------------------------------------------
-    # STEP 3: Save to feat_matrix + parquet snapshot
+    # STEP 3: Save to feat_matrix (DuckDB table)
     # ------------------------------------------------------------------
-    print("\n💾 Saving final matrix...")
+    logger.info("\n💾 Saving final matrix to DuckDB table feat_matrix...")
 
     con.execute("DROP TABLE IF EXISTS feat_matrix")
-    con.execute("CREATE TABLE feat_matrix AS SELECT * FROM __feat_base")
+    con.execute("""
+        CREATE TABLE feat_matrix AS
+        SELECT * FROM __feat_base
+    """)
 
-    out_path = Path(f"scripts/feature_matrices/{args.date}_academic_feature_matrix.parquet")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fm_rows = con.execute("SELECT COUNT(*) FROM feat_matrix").fetchone()[0]
+    fm_cols = len(con.execute("PRAGMA table_info('feat_matrix')").fetchdf())
+    logger.info(f"✔ feat_matrix created: {fm_rows:,} rows × {fm_cols} columns")
 
-    df = con.execute("SELECT * FROM feat_matrix").fetchdf()
-    df.to_parquet(out_path, index=False)
+    # ------------------------------------------------------------------
+    # STEP 4: Export partitioned Parquet (overwrite-safe)
+    # ------------------------------------------------------------------
+    out_dir = Path(f"scripts/feature_matrices/{args.date}_academic_matrix")
 
-    print(f"✔ Saved {len(df):,} rows × {df.shape[1]} columns to feat_matrix")
-    print(f"✔ Parquet snapshot: {out_path}")
+    # Clean old output directory safely
+    if out_dir.exists():
+        logger.info(f"🧹 Removing old output directory: {out_dir}")
+        shutil.rmtree(out_dir)
 
-    # Cleanup
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir_str = str(out_dir)
+
+    logger.info(f"💾 Writing partitioned Parquet dataset to: {out_dir_str}")
+
+    con.execute(f"""
+        COPY (
+            SELECT * FROM feat_matrix
+        ) TO '{out_dir_str}'
+        (FORMAT PARQUET, PARTITION_BY (ticker));
+    """)
+
+    logger.info("✔ Partitioned Parquet export complete.")
+
+    # Cleanup temp table
     con.execute("DROP TABLE IF EXISTS __feat_base")
-    con.close()
+
+    logger.info("✅ Full feature matrix build complete.")
 
 
 if __name__ == "__main__":
