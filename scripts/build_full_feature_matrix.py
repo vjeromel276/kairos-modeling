@@ -43,6 +43,7 @@ ACADEMIC_TABLES = [
     "feat_composite_long_v2",   # <-- new CL v2
     "feat_composite_v3",        # still your CS+CL v1 blend for now
     "feat_composite_v31",
+    "feat_vol_sizing",         # volatility sizing features
 ]
 
 
