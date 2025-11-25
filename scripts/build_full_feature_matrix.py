@@ -39,7 +39,7 @@ ACADEMIC_TABLES = [
     "feat_institutional_academic",
     "feat_composite_long",
     "feat_composite_v3",
-    "feat_composite_v4",
+    # "feat_composite_v4",
 ]
 
 
