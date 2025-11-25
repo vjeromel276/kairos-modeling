@@ -24,7 +24,9 @@ TABLES_TO_CHECK = [
     "feat_institutional_academic",
     "feat_composite_long",
     "feat_composite_v3",
-    "feat_composite_v4",
+    "feat_composite_v31",
+    "feat_composite_v32",
+    "feat_vol_sizing",
 ]
 
 
