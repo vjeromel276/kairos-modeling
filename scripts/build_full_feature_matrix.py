@@ -37,10 +37,14 @@ ACADEMIC_TABLES = [
     "feat_targets",
     "feat_composite_academic",
     "feat_institutional_academic",
-    "feat_composite_long",
-    "feat_composite_v3",
-    # "feat_composite_v4",
+    "feat_composite_long",      # CL v1 (keep if still useful)
+    "feat_value",
+    "feat_adv",
+    "feat_composite_long_v2",   # <-- new CL v2
+    "feat_composite_v3",        # still your CS+CL v1 blend for now
+    "feat_composite_v31",
 ]
+
 
 
 def main():
