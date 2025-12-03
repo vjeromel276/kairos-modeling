@@ -44,6 +44,7 @@ ACADEMIC_TABLES = [
     "feat_composite_v3",        # still your CS+CL v1 blend for now
     "feat_composite_v31",
     "feat_vol_sizing",         # volatility sizing features
+    "feat_beta",              # rolling market beta features
     "feat_composite_v32b",   # new CS+CL v2 blend
     "feat_composite_v33_regime", # new regime-aware CS+CL2 blend
 ]

@@ -13,7 +13,6 @@ import duckdb
 import argparse
 
 TABLES_TO_CHECK = [
-    "sep_base_academic",
     "feat_price_action",
     "feat_price_shape",
     "feat_stat",
@@ -22,11 +21,16 @@ TABLES_TO_CHECK = [
     "feat_targets",
     "feat_composite_academic",
     "feat_institutional_academic",
-    "feat_composite_long",
-    "feat_composite_v3",
+    "feat_composite_long",      # CL v1 (keep if still useful)
+    "feat_value",
+    "feat_adv",
+    "feat_composite_long_v2",   # <-- new CL v2
+    "feat_composite_v3",        # still your CS+CL v1 blend for now
     "feat_composite_v31",
-    "feat_composite_v32",
-    "feat_vol_sizing",
+    "feat_vol_sizing",         # volatility sizing features
+    "feat_beta",              # rolling market beta features
+    "feat_composite_v32b",   # new CS+CL v2 blend
+    "feat_composite_v33_regime", # new regime-aware CS+CL2 blend
 ]
 
 
