@@ -39,7 +39,9 @@ import logging
 import duckdb
 import pandas as pd
 import numpy as np
-
+import os
+import subprocess
+from scripts.log_backtest_run import log_backtest_result # <-- added
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s"
@@ -350,6 +352,38 @@ def main():
         target_vol=args.target_vol,
     )
     summarize(bt, rebalance_every=args.rebalance_every, target_vol=args.target_vol)
+    # === NEW: LOG METRICS ===
+    port_total = (1 + bt["port_ret"]).prod() - 1.0
+    port_ann, port_vol, port_sharpe = annualize(bt["port_ret"], args.rebalance_every)
+    bench_ann, bench_vol, bench_sharpe = annualize(bt["bench_ret"], args.rebalance_every)
+    port_eq = (1 + bt["port_ret"]).cumprod()
+    bench_eq = (1 + bt["bench_ret"]).cumprod()
+    port_dd = max_drawdown(port_eq)
+    bench_dd = max_drawdown(bench_eq)
+    active_ann, active_vol, active_sharpe = annualize(bt["active_ret"], args.rebalance_every)
+
+
+    run_cmd = " ".join(subprocess.check_output(["ps", "-o", "args=", "-p", str(os.getpid())]).decode().strip().split())
+    log_backtest_result(
+    db_path=args.db,
+    strategy_name=os.path.basename(__file__),
+    run_command=run_cmd,
+    start_date=args.start_date,
+    end_date=args.end_date,
+    port_total=port_total,
+    port_ann=port_ann,
+    port_vol=port_vol,
+    port_sharpe=port_sharpe,
+    port_dd=port_dd,
+    bench_total=bench_eq.iloc[-1] - 1.0,
+    bench_ann=bench_ann,
+    bench_vol=bench_vol,
+    bench_sharpe=bench_sharpe,
+    bench_dd=bench_dd,
+    active_ann=active_ann,
+    active_vol=active_vol,
+    active_sharpe=active_sharpe,
+    )
     con.close()
 
 

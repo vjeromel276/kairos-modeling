@@ -31,6 +31,19 @@ TABLES_TO_CHECK = [
     "feat_beta",              # rolling market beta features
     "feat_composite_v32b",   # new CS+CL v2 blend
     "feat_composite_v33_regime", # new regime-aware CS+CL2 blend
+    #*_filled tables are assumed clean and skipped
+    "feat_price_action_filled",
+    "feat_price_shape_filled",
+    "feat_stat_filled",
+    "feat_trend_filled",
+    "feat_volume_volatility_filled",
+    "feat_institutional_academic_filled",
+    "feat_value_filled",
+    "feat_adv_filled",
+    "feat_vol_sizing_filled",
+    "feat_beta_filled",
+    "feat_matrix_filled",
+    "feat_mlm"                 # Market Language Model alpha
 ]
 
 

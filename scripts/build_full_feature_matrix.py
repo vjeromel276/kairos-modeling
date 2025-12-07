@@ -47,6 +47,7 @@ ACADEMIC_TABLES = [
     "feat_beta",              # rolling market beta features
     "feat_composite_v32b",   # new CS+CL v2 blend
     "feat_composite_v33_regime", # new regime-aware CS+CL2 blend
+    "feat_mlm"                 # Market Language Model alpha
 ]
 
 
