@@ -16,7 +16,7 @@ Changes vs Risk3:
         normalize w_new
 
 Inputs:
-    - feat_matrix with:
+    - feat_matrix_v2 with:
         ticker, date, alpha_column, target_column, vol_blend, adv_20, size_z
     - tickers with:
         ticker, sector
@@ -76,8 +76,8 @@ def annualize(returns: pd.Series, period_days: int = 5) -> tuple[float, float, f
 
 
 def load_data(con, alpha_col, target_col, start, end) -> pd.DataFrame:
-    """Load alpha, target, vol_blend, adv_20, size_z, sector from feat_matrix + tickers."""
-    logger.info("Loading feat_matrix + sectors for Risk4...")
+    """Load alpha, target, vol_blend, adv_20, size_z, sector from feat_matrix_v2 + tickers."""
+    logger.info("Loading feat_matrix_v2 + sectors for Risk4...")
 
     where = [
         f"{alpha_col} IS NOT NULL",
@@ -102,7 +102,7 @@ def load_data(con, alpha_col, target_col, start, end) -> pd.DataFrame:
             fm.adv_20,
             fm.size_z,
             t.sector
-        FROM feat_matrix fm
+        FROM feat_matrix_v2 fm
         LEFT JOIN tickers t USING (ticker)
         WHERE {where_sql}
         ORDER BY date, ticker
