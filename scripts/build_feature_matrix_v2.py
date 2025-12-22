@@ -92,6 +92,8 @@ def main():
         'feat_composite_v5',
         'feat_composite_v6',  # IC-corrected weights
         'feat_composite_v7',  # 50/50 blend - BEST
+        'feat_composite_v32b',   # new CS+CL v2 blend
+        'feat_composite_v8',        # still your CS+CL v1 blend for now
     ]
     
     # Only include tables that exist
