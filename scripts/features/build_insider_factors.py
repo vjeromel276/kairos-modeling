@@ -95,7 +95,7 @@ def main():
     print("  Getting trading dates from sep...")
     trading_dates = con.execute("""
         SELECT DISTINCT date 
-        FROM sep 
+        FROM sep_base
         WHERE date >= '2000-01-01'
         ORDER BY date
     """).fetchdf()

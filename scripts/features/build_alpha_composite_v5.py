@@ -96,7 +96,7 @@ def main():
     print("  Getting trading dates...")
     base = con.execute("""
         SELECT DISTINCT ticker, date 
-        FROM sep 
+        FROM sep_base
         WHERE date >= '2000-01-01'
     """).fetchdf()
     print(f"  Base: {len(base):,} ticker-date pairs")

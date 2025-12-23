@@ -108,11 +108,11 @@ def main():
         print(f"  - {t}")
 
     # Start with base dates from SEP
-    print("\nBuilding base grid from SEP...")
+    print("\nBuilding base grid from SEP_BASE...")
     
     base_query = f"""
         SELECT DISTINCT ticker, date
-        FROM sep
+        FROM sep_base
         WHERE date BETWEEN '{args.min_date}' AND '{args.date}'
         ORDER BY ticker, date
     """

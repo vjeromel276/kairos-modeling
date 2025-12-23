@@ -47,7 +47,7 @@ def main():
 
     # Check SEP table
     print("Checking sep table...")
-    count = con.execute("SELECT COUNT(*) FROM sep").fetchone()[0]
+    count = con.execute("SELECT COUNT(*) FROM sep_base").fetchone()[0]
     print(f"  Total rows in sep: {count:,}")
 
     # Build momentum factors using window functions
@@ -66,7 +66,7 @@ def main():
             LAG(closeadj, 126) OVER (PARTITION BY ticker ORDER BY date) AS price_6m_ago,
             LAG(closeadj, 252) OVER (PARTITION BY ticker ORDER BY date) AS price_12m_ago,
             LAG(closeadj, 231) OVER (PARTITION BY ticker ORDER BY date) AS price_11m_ago  -- 252 - 21 = 231
-        FROM sep
+        FROM sep_base
         WHERE closeadj > 0 
           AND date >= '1999-01-01'  -- Need 1 year of history for 12m momentum starting 2000
     )
