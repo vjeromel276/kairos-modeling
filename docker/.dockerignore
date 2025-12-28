@@ -1,0 +1,16 @@
+cd docker/pipeline
+
+cat > .dockerignore << 'EOF'
+# Exclude data directories - these are outputs, not source code
+scripts/sep_dataset/
+scripts/feature_matrices/
+scripts/.ipynb_checkpoints/
+
+# Exclude any parquet/csv data files
+**/*.parquet
+**/*.csv
+
+# Exclude pycache
+**/__pycache__/
+**/*.pyc
+EOF

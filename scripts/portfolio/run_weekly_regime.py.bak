@@ -79,12 +79,12 @@ def main():
         print("ERROR: Could not resolve market date from sep_base")
         sys.exit(1)
 
-    v33_date = max_date(con, "feat_composite_v33_regime")
-    if v33_date is None:
-        print("ERROR: feat_composite_v33_regime not found")
+    v7_date = max_date(con, "feat_composite_v7")
+    if v7_date is None:
+        print("ERROR: feat_composite_v7 not found")
         sys.exit(1)
 
-    decision_date = min(market_date, v33_date)
+    decision_date = min(market_date, v7_date)
 
     # --- Fetch regime ---
     regime_row = con.execute(

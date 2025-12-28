@@ -43,7 +43,7 @@ def main():
         sys.exit(1)
 
     decision_date = con.execute(
-        "SELECT MAX(date) FROM feat_composite_v33_regime"
+        "SELECT MAX(date) FROM feat_composite_v7"
     ).fetchone()[0]
 
     hedge_weight = regime_row[1]

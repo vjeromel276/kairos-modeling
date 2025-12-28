@@ -6,7 +6,7 @@ Weekly primary portfolio builder (long-only).
 
 - Uses DECISION DATE (information clock)
 - Executes on MARKET DATE (price clock)
-- Reads alpha_composite_v33_regime from feat_matrix_v2
+- Reads alpha_composite_v7 from feat_matrix_v2
 - Sizes by inverse vol_blend
 - Writes labeled, auditable holdings
 """
@@ -41,11 +41,11 @@ def main():
     ).fetchone()[0]
 
     decision_date = con.execute(
-        "SELECT MAX(date) FROM feat_composite_v33_regime"
+        "SELECT MAX(date) FROM feat_composite_v7"
     ).fetchone()[0]
 
     if decision_date is None:
-        print("ERROR: No alpha_composite_v33_regime available")
+        print("ERROR: No alpha_composite_v7 available")
         sys.exit(1)
 
     # --- Idempotency ---
@@ -63,12 +63,12 @@ def main():
     df = con.execute("""
         SELECT
             ticker,
-            alpha_composite_v33_regime AS alpha,
+            alpha_composite_v7 AS alpha,
             vol_blend,
             adv_20
         FROM feat_matrix_v2
         WHERE date = ?
-          AND alpha_composite_v33_regime IS NOT NULL
+          AND alpha_composite_v7 IS NOT NULL
           AND adv_20 >= ?
     """, [decision_date, ADV_MIN]).fetchdf()
 
