@@ -75,6 +75,7 @@ PIPELINE = {
             ("scripts/features/build_academic_composite_factors.py", ["--db", "{db}"]),
             # Intermediate composites (v31, v32b are dependencies for v33)
             ("scripts/features/build_composite_v31.py", ["--db", "{db}"]),
+            ("scripts/features/smooth_alpha_v31.py", ["--db", "{db}"]), 
             ("scripts/features/build_composite_v32b.py", ["--db", "{db}"]),
         ]
     },

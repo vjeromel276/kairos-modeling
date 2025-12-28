@@ -43,12 +43,20 @@ logger = logging.getLogger(__name__)
 # =============================================================
 
 REGIME_WEIGHTS = {
-    "low_vol_bull":      (0.50, 0.25, 0.25),
-    "low_vol_bear":      (0.25, 0.50, 0.25),
-    "normal_vol_bull":   (0.40, 0.30, 0.30),
-    "normal_vol_bear":   (0.25, 0.45, 0.30),
-    "high_vol_bull":     (0.25, 0.50, 0.25),
-    "high_vol_bear":     (0.20, 0.55, 0.25),
+    # Low volatility
+    "low_vol_bull":      (0.50,  0.25,  0.25),
+    "low_vol_neutral":   (0.375, 0.375, 0.25),   # NEW
+    "low_vol_bear":      (0.25,  0.50,  0.25),
+    
+    # Normal volatility
+    "normal_vol_bull":   (0.40,  0.30,  0.30),
+    "normal_vol_neutral":(0.325, 0.375, 0.30),   # NEW
+    "normal_vol_bear":   (0.25,  0.45,  0.30),
+    
+    # High volatility
+    "high_vol_bull":     (0.25,  0.50,  0.25),
+    "high_vol_neutral":  (0.225, 0.525, 0.25),   # NEW
+    "high_vol_bear":     (0.20,  0.55,  0.25),
 }
 
 
