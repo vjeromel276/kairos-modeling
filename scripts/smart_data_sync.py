@@ -141,24 +141,18 @@ def check_api_for_new_data(
     Returns: (has_new_data, api_max_date, estimated_rows)
     """
     date_field = table_config["date_field"]
-    use_gte = table_config.get("use_gte", False)
     
     # Build URL to check for latest data
-    # We'll request just 1 row sorted by date descending to find max
+    # Query for data newer than local_max
     url = f"{BASE_URL}/{table_name}.json?"
     
-    if local_max and use_gte:
-        # For SF1/SF2, check if anything newer than local max
+    if local_max:
+        # Check if anything newer than local max exists
         check_date = local_max + timedelta(days=1)
         url += f"{date_field}.gte={check_date.strftime('%Y-%m-%d')}&"
-    elif local_max:
-        # For SEP/DAILY, check latest available date
-        pass
     
     url += f"qopts.columns={date_field}&"
-    url += f"qopts.per_page=1&"
-    url += f"qopts.sort_by={date_field}&"
-    url += f"qopts.sort_order=desc&"
+    url += f"qopts.per_page=100&"
     url += f"api_key={api_key}"
     
     try:
@@ -170,24 +164,25 @@ def check_api_for_new_data(
         rows = data.get("datatable", {}).get("data", [])
         
         if not rows:
-            # No new data found
-            return False, None, 0
+            # No new data found - we're up to date
+            return False, local_max, 0  # Return local_max as api_max to show "up to date"
         
-        # Get the date from first row
-        api_date_str = rows[0][0]
-        if api_date_str:
-            api_max = datetime.strptime(api_date_str[:10], "%Y-%m-%d").date()
-        else:
-            return False, None, 0
+        # Find max date from all returned rows
+        api_max = None
+        for row in rows:
+            if row[0]:
+                row_date = datetime.strptime(str(row[0])[:10], "%Y-%m-%d").date()
+                if api_max is None or row_date > api_max:
+                    api_max = row_date
         
-        # Check if this is newer than local
+        if api_max is None:
+            return False, local_max, 0
+        
+        # New data exists
         if local_max is None:
             return True, api_max, -1  # -1 means unknown count, need full download
         
-        if api_max > local_max:
-            return True, api_max, -1
-        
-        return False, api_max, 0
+        return True, api_max, -1
         
     except Exception as e:
         logger.warning(f"  Error checking API for {table_name}: {e}")
@@ -455,8 +450,11 @@ def print_summary(results: List[Dict]):
             "check_failed": "?",
         }.get(r["status"], "?")
         
+        # Format local_max properly
+        local_str = str(r['local_max']) if r['local_max'] else 'None'
+        
         logger.info(f"{status_icon} {r['table']:8} ({r['db_table']:12}) | "
-                   f"Local: {r['local_max'] or 'None':12} | "
+                   f"Local: {local_str:12} | "
                    f"Status: {r['status']}")
         
         if r["rows_added"] > 0:

@@ -8,8 +8,8 @@
 #   - DAILY: Daily fundamental ratios (PE, PB, PS, EV/EBITDA, market cap, etc.)
 #
 # Usage: 
-#   python daily_download.py --date YYYY-MM-DD
-#   python daily_download.py --date YYYY-MM-DD --tables SEP DAILY
+#   python scripts/daily_download.py --date YYYY-MM-DD
+#   python scripts/daily_download.py --date YYYY-MM-DD --tables SEP DAILY
 
 import argparse
 import logging

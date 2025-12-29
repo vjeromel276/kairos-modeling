@@ -10,7 +10,7 @@ Tables handled:
   - DAILY → daily (incremental fundamental ratios: PE, PB, PS, EV/EBITDA, etc.)
 
 Usage:
-  python merge_daily_download_duck.py --update-golden data/kairos.duckdb --daily-dir scripts/sep_dataset/daily_downloads/
+  python scripts/merge_daily_download_duck.py --update-golden data/kairos.duckdb --daily-dir scripts/sep_dataset/daily_downloads/
 """
 
 import argparse
