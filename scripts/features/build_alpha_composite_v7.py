@@ -23,6 +23,8 @@ Requirements:
 - feat_quality_v2 (quality factor from SF1 fundamentals)
 
 Output table: feat_composite_v7
+
+FIXED: Ensures date column is DATE type (not TIMESTAMP_NS) for proper joins.
 """
 
 import argparse
@@ -65,7 +67,7 @@ def main():
     print("  ✓ feat_composite_v33_regime")
     print("  ✓ feat_quality_v2")
 
-    # Build v7
+    # Build v7 with explicit DATE cast
     print("\nBuilding alpha_composite_v7...")
     
     con.execute("DROP TABLE IF EXISTS feat_composite_v7")
@@ -73,13 +75,19 @@ def main():
         CREATE TABLE feat_composite_v7 AS
         SELECT 
             a.ticker,
-            a.date,
+            CAST(a.date AS DATE) as date,
             {w_v33} * a.alpha_composite_v33_regime + {w_qual} * b.quality_composite_z as alpha_composite_v7
         FROM feat_composite_v33_regime a
-        JOIN feat_quality_v2 b ON a.ticker = b.ticker AND a.date = b.date
+        JOIN feat_quality_v2 b 
+            ON a.ticker = b.ticker 
+            AND CAST(a.date AS DATE) = CAST(b.date AS DATE)
         WHERE a.alpha_composite_v33_regime IS NOT NULL 
           AND b.quality_composite_z IS NOT NULL
     """)
+
+    # Verify date type
+    date_type = con.execute("SELECT typeof(date) FROM feat_composite_v7 LIMIT 1").fetchone()[0]
+    print(f"  Output date type: {date_type}")
 
     # Create indexes
     print("Creating indexes...")
@@ -106,46 +114,19 @@ def main():
     print(f"  Mean alpha: {stats['avg_alpha'].iloc[0]:.4f}")
     print(f"  Std alpha: {stats['std_alpha'].iloc[0]:.4f}")
 
-    # Update feat_matrix_v2 if it exists
-    if 'feat_matrix_v2' in tables:
-        print("\nUpdating feat_matrix_v2...")
-        
-        # Check if column exists
-        cols = con.execute("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name = 'feat_matrix_v2'
-        """).fetchdf()['column_name'].tolist()
-        
-        if 'alpha_composite_v7' not in cols:
-            con.execute("ALTER TABLE feat_matrix_v2 ADD COLUMN alpha_composite_v7 DOUBLE")
-        
-        con.execute(f"""
-            UPDATE feat_matrix_v2 m
-            SET alpha_composite_v7 = {w_v33} * v33.alpha_composite_v33_regime + {w_qual} * q.quality_composite_z
-            FROM feat_composite_v33_regime v33
-            JOIN feat_quality_v2 q ON v33.ticker = q.ticker AND v33.date = q.date
-            WHERE m.ticker = v33.ticker AND m.date = v33.date
-              AND v33.alpha_composite_v33_regime IS NOT NULL 
-              AND q.quality_composite_z IS NOT NULL
-        """)
-        
-        coverage = con.execute("""
-            SELECT AVG(CASE WHEN alpha_composite_v7 IS NOT NULL THEN 1.0 ELSE 0.0 END) * 100 as pct
-            FROM feat_matrix_v2
-        """).fetchone()[0]
-        print(f"  ✓ Updated feat_matrix_v2 (coverage: {coverage:.1f}%)")
-
     con.close()
 
     print(f"\n{'='*60}")
     print("DONE - Alpha composite v7 built successfully")
     print(f"{'='*60}")
-    print("\nBacktest command:")
-    print("  python scripts/backtesting/backtest_academic_strategy_risk4.py \\")
-    print("    --db data/kairos.duckdb \\")
-    print("    --alpha-column alpha_composite_v7 \\")
-    print("    --target-column ret_5d_f \\")
-    print("    --top-n 75 --rebalance-every 5 --target-vol 0.20")
+    print("\nNext steps:")
+    print("  1. Rebuild feat_matrix_v2 to pick up the fixed v7")
+    print("  2. Run backtest:")
+    print("     python scripts/backtesting/backtest_academic_strategy_risk4.py \\")
+    print("       --db data/kairos.duckdb \\")
+    print("       --alpha-column alpha_composite_v7 \\")
+    print("       --target-column ret_5d_f \\")
+    print("       --top-n 75 --rebalance-every 5 --target-vol 0.20")
     print()
 
 
