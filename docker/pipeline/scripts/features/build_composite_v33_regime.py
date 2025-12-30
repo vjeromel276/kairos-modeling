@@ -99,6 +99,13 @@ def build_v33(con):
 
     cs, cl2, sm, regimes = load_component_tables(con)
 
+    # Normalize date types (fix DATE vs TIMESTAMP_NS mismatch)
+    logger.info("Normalizing date types...")
+    cs['date'] = pd.to_datetime(cs['date']).dt.date
+    cl2['date'] = pd.to_datetime(cl2['date']).dt.date
+    sm['date'] = pd.to_datetime(sm['date']).dt.date
+    regimes['date'] = pd.to_datetime(regimes['date']).dt.date
+
     # Merge CS (primary)
     logger.info("Merging CS + CL2 + SM...")
     df = cs.merge(cl2, on=["ticker", "date"], how="left")

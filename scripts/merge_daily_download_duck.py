@@ -1,383 +1,285 @@
 #!/usr/bin/env python3
 """
-merge_daily_download_duck.py
-============================
-Merge daily SEP and DAILY Parquets into DuckDB tables,
-then update derived tables (sep_base_common).
+build_feature_matrix_v2.py
+==========================
+Build complete feature matrix including both legacy features and new v2 factors.
 
-Tables handled:
-  - SEP → sep_base (incremental price data)
-  - DAILY → daily (incremental fundamental ratios: PE, PB, PS, EV/EBITDA, etc.)
+FIXED: Handles duplicate columns and missing data gracefully.
 
-Usage:
-  python scripts/merge_daily_download_duck.py --update-golden data/kairos.duckdb --daily-dir scripts/sep_dataset/daily_downloads/
+This script:
+1. Loads all feat_* tables
+2. Joins them on ticker/date (with duplicate column handling)
+3. Adds the new v2 factors (value, momentum, quality, insider, composite_v5)
+4. Creates the final feat_matrix_v2 table
 """
 
 import argparse
-import logging
-import os
-import sys
-import glob
-from datetime import datetime, date
-from typing import Optional, List, Dict
 import duckdb
+import pandas as pd
+import numpy as np
+from datetime import datetime
 
-# — Logging setup —
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger(__name__)
-
-# Table configurations
-# Maps file prefix to DuckDB table name and date column
-TABLE_CONFIG: Dict[str, Dict] = {
-    "SHARADAR_SEP": {
-        "table_name": "sep_base",
-        "date_column": "date",
-        "description": "Daily stock prices",
-    },
-    "SHARADAR_DAILY": {
-        "table_name": "daily",
-        "date_column": "date",
-        "description": "Daily fundamental ratios",
-    },
-}
-
-
-def parse_date_from_filename(filename: str) -> date:
-    """Extract date from filename like SHARADAR_SEP_2025-12-26.parquet"""
-    base = os.path.basename(filename)
-    try:
-        # Handle both SEP and DAILY formats
-        # SHARADAR_SEP_2025-12-26.parquet → 2025-12-26
-        # SHARADAR_DAILY_2025-12-26.parquet → 2025-12-26
-        parts = base.replace(".parquet", "").split("_")
-        date_part = parts[-1]  # Last part is the date
-        return datetime.strptime(date_part, "%Y-%m-%d").date()
-    except Exception:
-        raise ValueError(f"Cannot parse date from filename '{filename}'.")
-
-
-def get_file_prefix(filename: str) -> str:
-    """Extract table prefix from filename like SHARADAR_SEP_2025-12-26.parquet"""
-    base = os.path.basename(filename)
-    # SHARADAR_SEP_2025-12-26.parquet → SHARADAR_SEP
-    parts = base.replace(".parquet", "").split("_")
-    if len(parts) >= 3:
-        return f"{parts[0]}_{parts[1]}"
-    raise ValueError(f"Cannot parse prefix from filename '{filename}'.")
-
-
-def find_daily_files(daily_dir: str) -> Dict[str, List[str]]:
-    """
-    Find all parquet files in the directory, grouped by table type.
-    Returns: {"SHARADAR_SEP": [file1, file2, ...], "SHARADAR_DAILY": [...]}
-    """
-    all_files = glob.glob(os.path.join(daily_dir, "SHARADAR_*.parquet"))
+def safe_merge(base: pd.DataFrame, new_df: pd.DataFrame, table_name: str) -> pd.DataFrame:
+    """Merge with duplicate column handling."""
+    # Normalize date types before merge (fix DATE vs TIMESTAMP_NS mismatch)
+    if 'date' in new_df.columns:
+        new_df['date'] = pd.to_datetime(new_df['date']).dt.date
+    if 'date' in base.columns:
+        base['date'] = pd.to_datetime(base['date']).dt.date
     
-    grouped: Dict[str, List[str]] = {prefix: [] for prefix in TABLE_CONFIG.keys()}
+    # Find overlapping columns (excluding join keys)
+    join_cols = ['ticker', 'date']
+    base_cols = set(base.columns) - set(join_cols)
+    new_cols = set(new_df.columns) - set(join_cols)
+    overlap = base_cols & new_cols
     
-    for f in all_files:
-        try:
-            prefix = get_file_prefix(f)
-            if prefix in grouped:
-                grouped[prefix].append(f)
-        except ValueError as e:
-            logger.warning(f"Skipping file: {e}")
+    if overlap:
+        # Rename overlapping columns in new_df with table suffix
+        rename_map = {col: f"{col}_{table_name}" for col in overlap}
+        new_df = new_df.rename(columns=rename_map)
+        print(f"    Renamed {len(overlap)} duplicate cols: {list(overlap)[:3]}...")
     
-    # Sort each group by date
-    for prefix in grouped:
-        grouped[prefix] = sorted(grouped[prefix], key=lambda p: parse_date_from_filename(p))
-        if grouped[prefix]:
-            logger.info(f"Found {len(grouped[prefix])} {prefix} file(s)")
-    
-    return grouped
-
-
-def connect_duckdb(db_path: str) -> duckdb.DuckDBPyConnection:
-    if not os.path.exists(db_path):
-        logger.info(f"DuckDB not found at '{db_path}'. Creating new database.")
-    return duckdb.connect(db_path)
-
-
-def ensure_table_exists(conn: duckdb.DuckDBPyConnection, table_name: str, sample_file: str):
-    """Create table if it doesn't exist, using sample file for schema."""
-    tables = conn.execute("SHOW TABLES").fetchdf()["name"].tolist()
-    
-    if table_name not in tables:
-        logger.info(f"Creating table '{table_name}' from sample file schema...")
-        conn.execute(f"""
-            CREATE TABLE {table_name} AS
-            SELECT * FROM read_parquet('{sample_file}') LIMIT 0
-        """)
-        logger.info(f"Created empty table '{table_name}'")
-    else:
-        logger.info(f"Table '{table_name}' already exists")
-
-
-def get_current_max_date(conn: duckdb.DuckDBPyConnection, table: str, date_column: str) -> Optional[date]:
-    """Get the maximum date currently in the table."""
-    try:
-        result = conn.execute(f"SELECT MAX({date_column}) FROM {table}").fetchone()
-        if result and result[0] is not None:
-            max_val = result[0]
-            if isinstance(max_val, datetime):
-                return max_val.date()
-            return max_val
-    except Exception as e:
-        logger.warning(f"Could not get max date from {table}: {e}")
-    return None
-
-
-def merge_parquet_file(
-    conn: duckdb.DuckDBPyConnection,
-    parquet_path: str,
-    table_name: str,
-    date_column: str,
-    max_date: Optional[date]
-) -> int:
-    """
-    Merge a single parquet file into the target table.
-    Returns number of rows inserted.
-    """
-    logger.info(f"Merging: {os.path.basename(parquet_path)} → {table_name}")
-    
-    # Count rows before
-    try:
-        before_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-    except Exception:
-        before_count = 0
-    
-    # Build filter clause
-    if max_date:
-        filter_clause = f"WHERE {date_column} > DATE '{max_date}'"
-    else:
-        filter_clause = ""
-    
-    # Insert new rows
-    conn.execute(f"""
-        INSERT INTO {table_name}
-        SELECT DISTINCT * FROM read_parquet('{parquet_path}')
-        {filter_clause}
-    """)
-    
-    # Count rows after
-    after_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-    inserted = after_count - before_count
-    
-    logger.info(f"  Inserted {inserted:,} rows from {os.path.basename(parquet_path)}")
-    
-    # Delete the processed file
-    os.remove(parquet_path)
-    logger.info(f"  Deleted: {parquet_path}")
-    
-    return inserted
-
-
-def merge_table_files(
-    conn: duckdb.DuckDBPyConnection,
-    files: List[str],
-    config: Dict
-) -> int:
-    """Merge all files for a single table type. Returns total rows inserted."""
-    if not files:
-        return 0
-    
-    table_name = config["table_name"]
-    date_column = config["date_column"]
-    
-    logger.info(f"\n{'='*50}")
-    logger.info(f"Merging {len(files)} files into '{table_name}'")
-    logger.info(f"{'='*50}")
-    
-    # Ensure table exists
-    ensure_table_exists(conn, table_name, files[0])
-    
-    # Get current max date
-    max_date = get_current_max_date(conn, table_name, date_column)
-    if isinstance(max_date, datetime):
-        max_date = max_date.date()
-    logger.info(f"Current max date in {table_name}: {max_date or 'None'}")
-    
-    # Filter to only files with dates > max_date
-    files_to_merge = []
-    for f in files:
-        file_date = parse_date_from_filename(f)
-        if max_date is None or file_date > max_date:
-            files_to_merge.append(f)
-        else:
-            logger.info(f"  Skipping {os.path.basename(f)} (date {file_date} <= {max_date})")
-            # Still delete old files
-            os.remove(f)
-    
-    if not files_to_merge:
-        logger.info(f"No new files to merge for {table_name}")
-        return 0
-    
-    # Merge each file
-    total_inserted = 0
-    for f in files_to_merge:
-        inserted = merge_parquet_file(conn, f, table_name, date_column, max_date)
-        total_inserted += inserted
-    
-    # Report final state
-    new_max = get_current_max_date(conn, table_name, date_column)
-    total_rows = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-    logger.info(f"✓ {table_name}: {total_rows:,} total rows, max date = {new_max}")
-    
-    return total_inserted
-
-
-def update_sep_base_common_full(conn: duckdb.DuckDBPyConnection):
-    """Full rebuild of sep_base_common from sep_base."""
-    logger.info("\nPerforming full rebuild of sep_base_common...")
-    
-    # Check if required view exists
-    try:
-        conn.execute("SELECT 1 FROM ticker_metadata_view LIMIT 1")
-    except Exception:
-        logger.warning("ticker_metadata_view not found, skipping sep_base_common update")
-        return
-    
-    conn.execute("""
-        CREATE OR REPLACE TABLE sep_base_common AS
-        SELECT s.*
-        FROM sep_base s
-        JOIN ticker_metadata_view m
-          ON s.ticker = m.ticker
-        WHERE m.category = 'Domestic Common Stock'
-          AND m.scalemarketcap IN ('4 - Mid','5 - Large','6 - Mega')
-          AND m.volumeavg1m >= 2_000_000
-    """)
-    
-    count = conn.execute("SELECT COUNT(*) FROM sep_base_common").fetchone()[0]
-    logger.info(f"✓ sep_base_common rebuilt: {count:,} rows")
-
-
-def update_sep_base_common_incremental(conn: duckdb.DuckDBPyConnection):
-    """Incremental update of sep_base_common."""
-    logger.info("\nPerforming incremental update of sep_base_common...")
-    
-    # Check if table exists
-    tables = conn.execute("SHOW TABLES").fetchdf()["name"].tolist()
-    
-    if "sep_base_common" not in tables:
-        logger.info("sep_base_common doesn't exist; doing full rebuild")
-        update_sep_base_common_full(conn)
-        return
-    
-    # Check if required view exists
-    try:
-        conn.execute("SELECT 1 FROM ticker_metadata_view LIMIT 1")
-    except Exception:
-        logger.warning("ticker_metadata_view not found, skipping sep_base_common update")
-        return
-    
-    max_common_date = get_current_max_date(conn, "sep_base_common", "date")
-    if max_common_date is None:
-        logger.info("sep_base_common is empty; falling back to full rebuild")
-        update_sep_base_common_full(conn)
-        return
-    
-    logger.info(f"Current max date in sep_base_common: {max_common_date}")
-    
-    conn.execute(f"""
-        INSERT INTO sep_base_common
-        SELECT s.*
-        FROM sep_base s
-        JOIN ticker_metadata_view m
-          ON s.ticker = m.ticker
-        WHERE m.category = 'Domestic Common Stock'
-          AND m.scalemarketcap IN ('4 - Mid','5 - Large','6 - Mega')
-          AND m.volumeavg1m >= 2_000_000
-          AND s.date > DATE '{max_common_date}'
-    """)
-    
-    new_max = get_current_max_date(conn, "sep_base_common", "date")
-    logger.info(f"✓ sep_base_common updated, new max date: {new_max}")
+    return base.merge(new_df, on=join_cols, how='left')
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Merge daily SEP and DAILY Parquets into DuckDB tables.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Merge all files in default directory
-  python merge_daily_download_duck.py --update-golden data/kairos.duckdb
-  
-  # Merge with full rebuild of sep_base_common
-  python merge_daily_download_duck.py --update-golden data/kairos.duckdb --rebuild-common
-"""
-    )
-    parser.add_argument(
-        "--update-golden",
-        default="data/kairos.duckdb",
-        help="Path to the DuckDB database file."
-    )
-    parser.add_argument(
-        "--daily-dir",
-        default="scripts/sep_dataset/daily_downloads/",
-        help="Directory containing daily SHARADAR_*.parquet files."
-    )
-    parser.add_argument(
-        "--rebuild-common",
-        action="store_true",
-        help="Full rebuild of sep_base_common instead of incremental update."
-    )
+    parser = argparse.ArgumentParser(description="Build feature matrix v2")
+    parser.add_argument("--db", required=True, help="Path to DuckDB database")
+    parser.add_argument("--date", required=True, help="Latest date to include (YYYY-MM-DD)")
+    parser.add_argument("--universe", required=True, help="Path to universe CSV")
+    parser.add_argument("--min-date", default="2010-01-01", help="Minimum date")
     args = parser.parse_args()
 
-    logger.info(f"\n{'='*60}")
-    logger.info("MERGE DAILY DOWNLOADS")
-    logger.info(f"{'='*60}")
-    logger.info(f"Database: {args.update_golden}")
-    logger.info(f"Directory: {args.daily_dir}")
+    print(f"\n{'='*70}")
+    print("BUILD FEATURE MATRIX V2 (FIXED)")
+    print(f"{'='*70}\n")
+    print(f"Date range: {args.min_date} to {args.date}")
+
+    con = duckdb.connect(args.db)
+
+    # Load universe
+    print("\nLoading universe...")
+    universe = pd.read_csv(args.universe)
+    tickers = universe['ticker'].unique().tolist()
+    print(f"  Universe: {len(tickers):,} tickers")
+
+    # Get all feat_ tables
+    tables = con.execute("""
+        SELECT table_name FROM information_schema.tables 
+        WHERE table_schema = 'main' AND table_name LIKE 'feat_%'
+    """).fetchdf()['table_name'].tolist()
     
-    # Find all files grouped by table type
-    grouped_files = find_daily_files(args.daily_dir)
+    print(f"\nAvailable feature tables: {len(tables)}")
+
+    # Define priority tables (order matters - later tables override earlier for duplicates)
+    # V2 tables should come last to take precedence
+    priority_tables = [
+        # Core features (high coverage, stable)
+        'feat_price_action',
+        'feat_price_shape', 
+        'feat_stat',
+        'feat_trend',
+        'feat_volume_volatility',
+        'feat_targets',
+        'feat_adv',  # ADV for liquidity filtering
+        
+        # Intermediate composites
+        'feat_composite_academic',
+        'feat_institutional_academic',
+        'feat_composite_v31',
+        'feat_vol_sizing',
+        'feat_beta',
+        
+        # V2 factors (highest priority)
+        'feat_value_v2',
+        'feat_momentum_v2', 
+        'feat_quality_v2',
+        'feat_insider',
+        'feat_composite_v5',
+        'feat_composite_v6',  # IC-corrected weights
+        'feat_composite_v7',  # 50/50 blend - BEST
+        'feat_composite_v32b',   # new CS+CL v2 blend
+        'feat_composite_v8',        # still your CS+CL v1 blend for now
+    ]
     
-    total_files = sum(len(files) for files in grouped_files.values())
-    if total_files == 0:
-        logger.warning("No daily files found. Exiting without changes.")
-        sys.exit(0)
+    # Only include tables that exist
+    tables_to_use = [t for t in priority_tables if t in tables]
     
-    # Connect to database
-    conn = connect_duckdb(args.update_golden)
+    # Also try to get v33_regime directly if it exists
+    if 'feat_composite_v33_regime' in tables:
+        tables_to_use.append('feat_composite_v33_regime')
     
-    # Merge each table type
-    total_inserted = 0
-    for prefix, config in TABLE_CONFIG.items():
-        files = grouped_files.get(prefix, [])
-        if files:
-            inserted = merge_table_files(conn, files, config)
-            total_inserted += inserted
+    print(f"Tables to include: {len(tables_to_use)}")
+    for t in tables_to_use:
+        print(f"  - {t}")
+
+    # Start with base dates from SEP
+    print("\nBuilding base grid from SEP_BASE...")
     
-    # Update sep_base_common
-    if "sep_base" in [c["table_name"] for c in TABLE_CONFIG.values()]:
-        if args.rebuild_common:
-            update_sep_base_common_full(conn)
-        else:
-            update_sep_base_common_incremental(conn)
+    base_query = f"""
+        SELECT DISTINCT ticker, date
+        FROM sep_base
+        WHERE date BETWEEN '{args.min_date}' AND '{args.date}'
+        ORDER BY ticker, date
+    """
+    base = con.execute(base_query).fetchdf()
     
-    # Summary
-    logger.info(f"\n{'='*60}")
-    logger.info("MERGE COMPLETE")
-    logger.info(f"{'='*60}")
-    logger.info(f"Total rows inserted: {total_inserted:,}")
+    # Filter to universe
+    base = base[base['ticker'].isin(tickers)]
+    print(f"  Base grid: {len(base):,} ticker-date pairs")
+
+    # Join each table
+    print("\nJoining feature tables...")
     
-    # Show current state of tables
-    for prefix, config in TABLE_CONFIG.items():
-        table_name = config["table_name"]
+    for table in tables_to_use:
         try:
-            count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-            max_date = get_current_max_date(conn, table_name, config["date_column"])
-            logger.info(f"  {table_name}: {count:,} rows, max date = {max_date}")
-        except Exception:
-            logger.info(f"  {table_name}: (not found)")
+            # Get columns from table schema
+            cols_df = con.execute(f"""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = '{table}'
+            """).fetchdf()
+            all_cols = cols_df['column_name'].tolist()
+            
+            # Feature columns (excluding join keys)
+            feat_cols = [c for c in all_cols if c not in ['ticker', 'date']]
+            
+            if not feat_cols:
+                print(f"  ⚠ {table}: no feature columns, skipping")
+                continue
+            
+            # Build select with explicit column list
+            select_cols = ['ticker', 'date'] + feat_cols
+            select_str = ', '.join([f'"{c}"' for c in select_cols])
+            
+            # Load data
+            query = f"""
+                SELECT {select_str}
+                FROM {table}
+                WHERE date BETWEEN '{args.min_date}' AND '{args.date}'
+            """
+            df = con.execute(query).fetchdf()
+            
+            if len(df) == 0:
+                print(f"  ⚠ {table}: no data in date range, skipping")
+                continue
+            
+            # Safe merge with duplicate handling
+            base = safe_merge(base, df, table.replace('feat_', ''))
+            
+            # Check coverage of first feature column
+            first_col = feat_cols[0]
+            # Find the actual column name (might have been renamed)
+            actual_col = first_col if first_col in base.columns else f"{first_col}_{table.replace('feat_', '')}"
+            if actual_col in base.columns:
+                coverage = base[actual_col].notna().mean() * 100
+            else:
+                coverage = 0.0
+            
+            print(f"  ✓ {table}: {len(feat_cols)} cols, {coverage:.1f}% coverage")
+            
+        except Exception as e:
+            print(f"  ⚠ {table}: error - {str(e)[:50]}")
+
+    print(f"\nFinal matrix: {len(base):,} rows, {len(base.columns)} columns")
+
+    # Identify key alpha columns
+    alpha_cols = [c for c in base.columns if 'alpha' in c.lower() or 'composite' in c.lower()]
+    print(f"\nAlpha/composite columns found: {len(alpha_cols)}")
+    for col in sorted(alpha_cols):
+        coverage = base[col].notna().mean() * 100
+        print(f"  {col}: {coverage:.1f}%")
+
+    # Ensure we have the key columns for backtesting
+    required_for_backtest = ['alpha_composite_v5', 'alpha_composite_v6', 'alpha_composite_v7', 'ret_5d_f']
+    missing_required = [c for c in required_for_backtest if c not in base.columns]
+    if missing_required:
+        print(f"\n⚠ WARNING: Missing required columns for backtest: {missing_required}")
+
+    # Identify and handle non-numeric columns
+    print("\nChecking column types...")
+    string_cols = []
+    numeric_cols = []
+    for col in base.columns:
+        if col in ['ticker', 'date']:
+            continue
+        # Check if column has string data
+        if base[col].dtype == 'object' or (base[col].dropna().apply(lambda x: isinstance(x, str)).any() if len(base[col].dropna()) > 0 else False):
+            string_cols.append(col)
+        else:
+            numeric_cols.append(col)
     
-    conn.close()
+    if string_cols:
+        print(f"  Found {len(string_cols)} string columns: {string_cols}")
+        print(f"  Converting to numeric or dropping...")
+        for col in string_cols:
+            # For regime columns, we can encode them or drop them
+            if 'regime' in col.lower():
+                # Encode regime as numeric
+                unique_vals = base[col].dropna().unique()
+                regime_map = {v: i for i, v in enumerate(unique_vals)}
+                base[f'{col}_encoded'] = base[col].map(regime_map)
+                print(f"    Encoded {col} -> {col}_encoded ({len(unique_vals)} unique values)")
+            # Drop the original string column
+            base = base.drop(columns=[col])
+            print(f"    Dropped string column: {col}")
+
+    # Write to database
+    print("\nWriting to database...")
+    con.execute("DROP TABLE IF EXISTS feat_matrix_v2")
+    
+    # Create table with proper types
+    col_defs = ['ticker VARCHAR', 'date DATE']
+    for col in base.columns:
+        if col not in ['ticker', 'date']:
+            # Escape column names that might have special characters
+            safe_col = col.replace('"', '""')
+            col_defs.append(f'"{safe_col}" DOUBLE')
+    
+    create_sql = f"CREATE TABLE feat_matrix_v2 ({', '.join(col_defs)})"
+    con.execute(create_sql)
+    
+    # Insert in batches
+    batch_size = 100000
+    total_inserted = 0
+    for i in range(0, len(base), batch_size):
+        batch = base.iloc[i:i+batch_size]
+        con.execute("INSERT INTO feat_matrix_v2 SELECT * FROM batch")
+        total_inserted = min(i+batch_size, len(base))
+        if total_inserted % 500000 == 0 or total_inserted == len(base):
+            print(f"  Inserted {total_inserted:,} / {len(base):,}")
+
+    # Create indexes
+    print("Creating indexes...")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_matrix_v2_ticker_date ON feat_matrix_v2(ticker, date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_matrix_v2_date ON feat_matrix_v2(date)")
+
+    # Verify
+    final_count = con.execute("SELECT COUNT(*) FROM feat_matrix_v2").fetchone()[0]
+    n_cols = con.execute("""
+        SELECT COUNT(*) FROM information_schema.columns 
+        WHERE table_name = 'feat_matrix_v2'
+    """).fetchone()[0]
+    
+    print(f"\n✓ Created feat_matrix_v2 with {final_count:,} rows and {n_cols} columns")
+
+    # Quick validation
+    print("\nQuick validation:")
+    validation = con.execute("""
+        SELECT 
+            COUNT(*) as total_rows,
+            COUNT(DISTINCT ticker) as n_tickers,
+            MIN(date) as min_date,
+            MAX(date) as max_date,
+            AVG(alpha_composite_v5) as avg_alpha_v5
+        FROM feat_matrix_v2
+    """).fetchdf()
+    print(validation.to_string())
+
+    con.close()
+    print(f"\n{'='*70}")
+    print("DONE - Feature matrix v2 built successfully")
+    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":

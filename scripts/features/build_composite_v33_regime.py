@@ -4,27 +4,25 @@ build_composite_v33_regime.py
 
 Composite v33 (Regime-Aware Horizon Blend)
 
-Uses 9-regime mapping (3 volatility levels x 3 market directions):
-    low_vol_bull, low_vol_neutral, low_vol_bear
-    normal_vol_bull, normal_vol_neutral, normal_vol_bear
-    high_vol_bull, high_vol_neutral, high_vol_bear
+Uses 6-regime mapping:
+    low_vol_bull
+    low_vol_bear
+    normal_vol_bull
+    normal_vol_bear
+    high_vol_bull
+    high_vol_bear
 
 Weights (CS, CL2, SM):
 
     low_vol_bull:      (0.50, 0.25, 0.25)
-    low_vol_neutral:   (0.375, 0.375, 0.25)
     low_vol_bear:      (0.25, 0.50, 0.25)
     normal_vol_bull:   (0.40, 0.30, 0.30)
-    normal_vol_neutral:(0.325, 0.375, 0.30)
     normal_vol_bear:   (0.25, 0.45, 0.30)
     high_vol_bull:     (0.25, 0.50, 0.25)
-    high_vol_neutral:  (0.225, 0.525, 0.25)
     high_vol_bear:     (0.20, 0.55, 0.25)
 
 Output table:
     feat_composite_v33_regime
-    
-FIXED: Ensures date column is DATE type (not TIMESTAMP_NS) for proper joins.
 """
 
 import argparse
@@ -47,48 +45,48 @@ logger = logging.getLogger(__name__)
 REGIME_WEIGHTS = {
     # Low volatility
     "low_vol_bull":      (0.50,  0.25,  0.25),
-    "low_vol_neutral":   (0.375, 0.375, 0.25),
+    "low_vol_neutral":   (0.375, 0.375, 0.25),   # NEW
     "low_vol_bear":      (0.25,  0.50,  0.25),
     
     # Normal volatility
     "normal_vol_bull":   (0.40,  0.30,  0.30),
-    "normal_vol_neutral":(0.325, 0.375, 0.30),
+    "normal_vol_neutral":(0.325, 0.375, 0.30),   # NEW
     "normal_vol_bear":   (0.25,  0.45,  0.30),
     
     # High volatility
     "high_vol_bull":     (0.25,  0.50,  0.25),
-    "high_vol_neutral":  (0.225, 0.525, 0.25),
+    "high_vol_neutral":  (0.225, 0.525, 0.25),   # NEW
     "high_vol_bear":     (0.20,  0.55,  0.25),
 }
 
 
 def load_component_tables(con):
-    """Load CS, CL2, SM, and regimes with consistent DATE types."""
+    """Load CS, CL2, SM, and regimes."""
 
     logger.info("Loading CS (alpha_composite_eq)...")
     cs = con.execute("""
-        SELECT ticker, CAST(date AS DATE) as date, alpha_composite_eq AS alpha_cs
+        SELECT ticker, date, alpha_composite_eq AS alpha_cs
         FROM feat_composite_academic
     """).fetchdf()
     logger.info(f"CS rows: {len(cs):,}")
 
     logger.info("Loading CL2 (alpha_CL_v2)...")
     cl2 = con.execute("""
-        SELECT ticker, CAST(date AS DATE) as date, alpha_CL_v2
+        SELECT ticker, date, alpha_CL_v2
         FROM feat_composite_long_v2
     """).fetchdf()
     logger.info(f"CL2 rows: {len(cl2):,}")
 
     logger.info("Loading smoothed alpha (alpha_smoothed)...")
     sm = con.execute("""
-        SELECT ticker, CAST(date AS DATE) as date, alpha_smoothed
+        SELECT ticker, date, alpha_smoothed
         FROM feat_alpha_smoothed_v31
     """).fetchdf()
     logger.info(f"SM rows: {len(sm):,}")
 
     logger.info("Loading regimes...")
     regimes = con.execute("""
-        SELECT CAST(date AS DATE) as date, regime
+        SELECT date, regime
         FROM regime_history_academic
     """).fetchdf()
     logger.info(f"Regime rows: {len(regimes):,}")
@@ -100,6 +98,13 @@ def build_v33(con):
     """Build regime-aware composite factor v33."""
 
     cs, cl2, sm, regimes = load_component_tables(con)
+
+    # Normalize date types (fix DATE vs TIMESTAMP_NS mismatch)
+    logger.info("Normalizing date types...")
+    cs['date'] = pd.to_datetime(cs['date']).dt.date
+    cl2['date'] = pd.to_datetime(cl2['date']).dt.date
+    sm['date'] = pd.to_datetime(sm['date']).dt.date
+    regimes['date'] = pd.to_datetime(regimes['date']).dt.date
 
     # Merge CS (primary)
     logger.info("Merging CS + CL2 + SM...")
@@ -149,30 +154,10 @@ def build_v33(con):
     after = len(df)
     logger.info(f"Deduped {before - after:,} rows. Final: {after:,}")
 
-    # Save with explicit DATE type cast
     logger.info("Saving feat_composite_v33_regime...")
     con.execute("DROP TABLE IF EXISTS feat_composite_v33_regime")
     con.register("df_v33", df)
-    
-    # Create table with explicit DATE type to ensure proper joins
-    con.execute("""
-        CREATE TABLE feat_composite_v33_regime AS 
-        SELECT 
-            ticker,
-            CAST(date AS DATE) as date,
-            alpha_cs,
-            alpha_CL_v2,
-            alpha_smoothed,
-            regime,
-            alpha_composite_v33_regime
-        FROM df_v33
-    """)
-
-    # Verify the date type
-    date_type = con.execute("""
-        SELECT typeof(date) FROM feat_composite_v33_regime LIMIT 1
-    """).fetchone()[0]
-    logger.info(f"Output date type: {date_type}")
+    con.execute("CREATE TABLE feat_composite_v33_regime AS SELECT * FROM df_v33")
 
     logger.info("feat_composite_v33_regime created successfully.")
 

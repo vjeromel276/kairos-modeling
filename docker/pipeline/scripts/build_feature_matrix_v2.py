@@ -21,6 +21,12 @@ from datetime import datetime
 
 def safe_merge(base: pd.DataFrame, new_df: pd.DataFrame, table_name: str) -> pd.DataFrame:
     """Merge with duplicate column handling."""
+    # Normalize date types before merge (fix DATE vs TIMESTAMP_NS mismatch)
+    if 'date' in new_df.columns:
+        new_df['date'] = pd.to_datetime(new_df['date']).dt.date
+    if 'date' in base.columns:
+        base['date'] = pd.to_datetime(base['date']).dt.date
+    
     # Find overlapping columns (excluding join keys)
     join_cols = ['ticker', 'date']
     base_cols = set(base.columns) - set(join_cols)
