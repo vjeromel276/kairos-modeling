@@ -88,7 +88,7 @@ def build_cl_v2(con: duckdb.DuckDBPyConnection) -> None:
 
     con.execute("DROP TABLE IF EXISTS feat_composite_long_v2")
     con.register("df_cl2", out)
-    con.execute("CREATE TABLE feat_composite_long_v2 AS SELECT * FROM df_cl2")
+    con.execute("CREATE TABLE feat_composite_long_v2 AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_cl2")
 
     logger.info(f"feat_composite_long_v2 created with {len(out):,} rows.")
 

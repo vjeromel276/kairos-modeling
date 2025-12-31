@@ -114,7 +114,7 @@ def build_composite(con: duckdb.DuckDBPyConnection) -> None:
 
     con.execute("DROP TABLE IF EXISTS feat_composite_academic")
     con.register("df_comp", df)
-    con.execute("CREATE TABLE feat_composite_academic AS SELECT * FROM df_comp")
+    con.execute("CREATE TABLE feat_composite_academic AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_comp")
 
     logger.info(f"Composite factor table saved: {len(df):,} rows.")
 

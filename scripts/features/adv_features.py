@@ -89,7 +89,7 @@ def build_adv(con: duckdb.DuckDBPyConnection) -> None:
 
     con.execute("DROP TABLE IF EXISTS feat_adv")
     con.register("df_adv", out)
-    con.execute("CREATE TABLE feat_adv AS SELECT * FROM df_adv")
+    con.execute("CREATE TABLE feat_adv AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_adv")
 
     logger.info(f"feat_adv created with {len(out):,} rows.")
 

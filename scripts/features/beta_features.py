@@ -138,7 +138,7 @@ def build_beta_features(con: duckdb.DuckDBPyConnection) -> None:
     logger.info("Writing feat_beta to DuckDB...")
     con.execute("DROP TABLE IF EXISTS feat_beta")
     con.register("df_beta", out)
-    con.execute("CREATE TABLE feat_beta AS SELECT * FROM df_beta")
+    con.execute("CREATE TABLE feat_beta AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_beta")
     logger.info(f"feat_beta created with {len(out):,} rows.")
 
 

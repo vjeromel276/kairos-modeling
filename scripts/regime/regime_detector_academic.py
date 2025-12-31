@@ -149,7 +149,13 @@ def save_regime_table(con, df):
     con.register("regime_df", df)
     con.execute("""
         CREATE TABLE regime_history_academic AS
-        SELECT * FROM regime_df
+        SELECT 
+            CAST(date AS DATE) as date,
+            vol_regime,
+            trend_regime,
+            dispersion_regime,
+            regime
+        FROM regime_df
     """)
     logger.info("Saved regime_history_academic.")
 

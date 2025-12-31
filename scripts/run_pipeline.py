@@ -40,6 +40,8 @@ PIPELINE = {
         "scripts": [
             ("scripts/create_option_b_universe.py", ["--db", "{db}", "--min-adv", "500000", "--min-price", "2.0", "--universe-csv", "{universe}"]),
             ("scripts/create_academic_base.py", ["--db", "{db}", "--universe", "{universe}"]),
+            # After each phase, add:
+            # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ]
     },
     2: {
@@ -54,6 +56,8 @@ PIPELINE = {
             ("scripts/features/vol_sizing_features.py", ["--db", "{db}"]),
             ("scripts/features/beta_features.py", ["--db", "{db}"]),
             ("scripts/features/generate_targets.py", ["--db", "{db}"]),
+            # After each phase, add:
+            # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ]
     },
     3: {
@@ -64,6 +68,8 @@ PIPELINE = {
             ("scripts/features/build_momentum_factors_v2.py", ["--db", "{db}"]),
             ("scripts/features/build_insider_factors.py", ["--db", "{db}"]),
             ("scripts/features/institutional_factor_academic.py", ["--db", "{db}"]),
+            # After each phase, add:
+            # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ]
     },
     4: {
@@ -77,6 +83,8 @@ PIPELINE = {
             ("scripts/features/build_composite_v31.py", ["--db", "{db}"]),
             ("scripts/features/smooth_alpha_v31.py", ["--db", "{db}"]), 
             ("scripts/features/build_composite_v32b.py", ["--db", "{db}"]),
+            # After each phase, add:
+            # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ]
     },
     5: {
@@ -91,6 +99,8 @@ PIPELINE = {
             ("scripts/features/build_alpha_composite_v8.py", ["--db", "{db}"]),
             # Feature matrix assembly (last step)
             ("scripts/build_feature_matrix_v2.py", ["--db", "{db}", "--date", "{date}", "--universe", "{universe}"]),
+            # After each phase, add:
+            # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ]
     },
 }

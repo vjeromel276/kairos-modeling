@@ -39,7 +39,7 @@ def build_smoothed(con):
 
     con.execute("DROP TABLE IF EXISTS feat_alpha_smoothed_v31")
     con.register("df_sm", df)
-    con.execute("CREATE TABLE feat_alpha_smoothed_v31 AS SELECT * FROM df_sm")
+    con.execute("CREATE TABLE feat_alpha_smoothed_v31 AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_sm")
     logger.info("Created feat_alpha_smoothed_v31.")
 
 

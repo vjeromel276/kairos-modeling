@@ -50,7 +50,13 @@ def main():
     con.execute("DROP TABLE IF EXISTS feat_stat")
 
     df_feat = compute_statistical_features(con)
-    con.execute("CREATE TABLE feat_stat AS SELECT * FROM df_feat")
+    con.execute("""
+                CREATE TABLE feat_stat AS 
+                    SELECT 
+                        "ticker",CAST(date AS DATE) as date,
+                        "close_zscore_21d","ret_1d_zscore_21d",
+                        "rolling_max_21d","mean_reversion_flag"
+                FROM df_feat""")
 
     print(f"✔ Saved {len(df_feat):,} rows to feat_stat")
 

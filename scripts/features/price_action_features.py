@@ -44,7 +44,15 @@ def main():
     con.execute("DROP TABLE IF EXISTS feat_price_action")
 
     df_feat = compute_price_action_features(con)
-    con.execute("CREATE TABLE feat_price_action AS SELECT * FROM df_feat")
+    con.execute("""
+        CREATE TABLE feat_price_action AS 
+        SELECT 
+            ticker,
+            CAST(date AS DATE) as date,
+            ret_1d, ret_5d, ret_21d,
+            hl_ratio, co_ratio, true_range, range_pct
+        FROM df_feat
+    """)
 
     print(f"✔ Saved {len(df_feat):,} rows to feat_price_action")
 

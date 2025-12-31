@@ -7,16 +7,19 @@ import duckdb
 import pandas as pd
 import argparse
 
+
 def compute_price_shape_features(con):
-    df = con.execute("""
+    df = con.execute(
+        """
         SELECT ticker, date, open, high, low, close
         FROM sep_base_academic
         ORDER BY ticker, date
-    """).fetchdf()
+    """
+    ).fetchdf()
 
     df["body_size"] = (df["close"] - df["open"]).abs()
-    df["upper_wick"] = df["high"] - df[["open","close"]].max(axis=1)
-    df["lower_wick"] = df[["open","close"]].min(axis=1) - df["low"]
+    df["upper_wick"] = df["high"] - df[["open", "close"]].max(axis=1)
+    df["lower_wick"] = df[["open", "close"]].min(axis=1) - df["low"]
     df["candle_range"] = df["high"] - df["low"]
 
     df["body_pct_of_range"] = df["body_size"] / df["candle_range"]
@@ -31,10 +34,17 @@ def compute_price_shape_features(con):
 
     return df[
         [
-            "ticker","date",
-            "body_size","upper_wick","lower_wick","candle_range",
-            "body_pct_of_range","upper_wick_pct","lower_wick_pct",
-            "gap_open","gap_pct"
+            "ticker",
+            "date",
+            "body_size",
+            "upper_wick",
+            "lower_wick",
+            "candle_range",
+            "body_pct_of_range",
+            "upper_wick_pct",
+            "lower_wick_pct",
+            "gap_open",
+            "gap_pct",
         ]
     ]
 
@@ -48,9 +58,16 @@ def main():
     con.execute("DROP TABLE IF EXISTS feat_price_shape")
 
     df_feat = compute_price_shape_features(con)
-    con.execute("CREATE TABLE feat_price_shape AS SELECT * FROM df_feat")
+    con.execute(
+        """
+                CREATE TABLE feat_price_shape AS 
+                    SELECT * REPLACE (CAST(date AS DATE) AS date)
+                    FROM df_feat
+                    """
+    )
 
     print(f"✔ Saved {len(df_feat):,} rows to feat_price_shape")
+
 
 if __name__ == "__main__":
     main()

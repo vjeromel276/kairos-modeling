@@ -61,7 +61,7 @@ def build_vol_sizing(con: duckdb.DuckDBPyConnection) -> None:
 
     con.execute("DROP TABLE IF EXISTS feat_vol_sizing")
     con.register("df_vol", out)
-    con.execute("CREATE TABLE feat_vol_sizing AS SELECT * FROM df_vol")
+    con.execute("CREATE TABLE feat_vol_sizing AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_vol")
 
     logger.info(f"feat_vol_sizing created with {len(out):,} rows.")
 

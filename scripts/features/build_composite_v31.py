@@ -63,7 +63,7 @@ def build_v31(con: duckdb.DuckDBPyConnection) -> None:
     # Save table
     con.execute("DROP TABLE IF EXISTS feat_composite_v31")
     con.register("df_v31", df)
-    con.execute("CREATE TABLE feat_composite_v31 AS SELECT * FROM df_v31")
+    con.execute("CREATE TABLE feat_composite_v31 AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_v31")
 
     logger.info(f"feat_composite_v31 created ({len(df):,} rows).")
 

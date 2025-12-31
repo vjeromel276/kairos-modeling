@@ -52,7 +52,7 @@ def main():
     df_targets = generate_targets(con)
 
     # Save into DuckDB as its own table
-    con.execute("CREATE TABLE feat_targets AS SELECT * FROM df_targets")
+    con.execute("CREATE TABLE feat_targets AS SELECT * REPLACE (CAST(date AS DATE) AS date) FROM df_targets")
 
     print(f"✔ Saved {len(df_targets):,} rows to feat_targets in {args.db}")
 
