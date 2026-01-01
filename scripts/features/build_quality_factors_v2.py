@@ -195,6 +195,10 @@ def main():
     tickers = df['ticker'].unique()
     quality_cols = ['computed_roe', 'computed_roa', 'computed_accruals']
     
+    # Get global max trading date for forward-fill
+    global_max_date = trading_dates['date'].max()
+    print(f"  Forward-filling to global max date: {global_max_date}")
+    
     for i, ticker in enumerate(tickers):
         if i % 500 == 0:
             print(f"  Processing {i:,} / {len(tickers):,} tickers")
@@ -204,7 +208,7 @@ def main():
         
         # Get date range for this ticker
         min_date = ticker_data['date'].min()
-        max_date = ticker_data['date'].max()
+        max_date = global_max_date  # FIX: forward-fill to latest trading date
         
         # Filter trading dates
         ticker_dates = trading_dates[
