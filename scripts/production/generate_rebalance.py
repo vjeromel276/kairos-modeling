@@ -9,7 +9,7 @@ Usage:
     python generate_rebalance.py --db data/kairos.duckdb --date 2025-12-30
 
 Author: Kairos Quant Engineering
-Version: 1.0
+Version: 1.1
 """
 
 import argparse
@@ -156,7 +156,7 @@ def load_latest_data(con, target_date=None):
     Load latest feature data for stock selection.
     
     Returns DataFrame with columns:
-        ticker, date, alpha, vol_blend, adv_20, sector
+        ticker, date, alpha, vol_blend, adv_20, sector, price
     """
     alpha_col = CONFIG["alpha_column"]
     vol_col = CONFIG["vol_column"]
@@ -174,9 +174,11 @@ def load_latest_data(con, target_date=None):
         m.{alpha_col} as alpha,
         m.{vol_col} as vol_blend,
         m.{adv_col} as adv_20,
-        t.sector
+        t.sector,
+        s.close as price
     FROM feat_matrix_v2 m
     JOIN tickers t ON m.ticker = t.ticker
+    JOIN sep_base_academic s ON m.ticker = s.ticker AND m.date = s.date
     WHERE {date_clause}
       AND m.{alpha_col} IS NOT NULL
       AND m.{vol_col} IS NOT NULL
@@ -347,38 +349,36 @@ def apply_turnover_smoothing(target, prior_weights):
 def generate_trades(target_weights, current_holdings=None, portfolio_value=1_000_000):
     """
     Generate trade list comparing target to current holdings.
-    
-    Args:
-        target_weights: DataFrame with [ticker, weight]
-        current_holdings: DataFrame with [ticker, shares, price] or None
-        portfolio_value: Total portfolio value in $
-    
-    Returns:
-        DataFrame with trade orders
     """
     if current_holdings is None:
         # First rebalance - all buys
         trades = target_weights[['ticker', 'weight']].copy()
+        if 'price' in target_weights.columns:
+            trades['price'] = target_weights['price']
         trades['action'] = 'BUY'
-        trades['target_value'] = trades['weight'] * portfolio_value
+        trades['target_value'] = (trades['weight'] * portfolio_value).round(2)
         trades['current_value'] = 0
         trades['delta_value'] = trades['target_value']
         return trades
     
-    # Merge target with current
+    # Rename prior weight column to avoid merge conflict
+    prior = current_holdings[['ticker', 'weight']].copy()
+    prior.columns = ['ticker', 'prior_weight']
+    
+    # Merge target with prior
     merged = target_weights[['ticker', 'weight']].merge(
-        current_holdings,
+        prior,
         on='ticker',
         how='outer'
     ).fillna(0)
     
+    # Add price from target_weights
+    if 'price' in target_weights.columns:
+        price_df = target_weights[['ticker', 'price']].copy()
+        merged = merged.merge(price_df, on='ticker', how='left')
+    
     merged['target_value'] = merged['weight'] * portfolio_value
-    
-    if 'shares' in merged.columns and 'price' in merged.columns:
-        merged['current_value'] = merged['shares'] * merged['price']
-    else:
-        merged['current_value'] = merged.get('current_weight', 0) * portfolio_value
-    
+    merged['current_value'] = merged['prior_weight'] * portfolio_value
     merged['delta_value'] = merged['target_value'] - merged['current_value']
     
     # Determine action
@@ -396,29 +396,44 @@ def generate_trades(target_weights, current_holdings=None, portfolio_value=1_000
 # OUTPUT GENERATION
 # ============================================================================
 
-def generate_picks_csv(weights, output_path):
-    """Generate picks.csv with full detail."""
-    cols = ['rank', 'ticker', 'weight', 'sector', 'alpha_z', 'vol_blend', 'adv_20']
+def generate_picks_csv(weights, output_path, portfolio_value=1_000_000):
+    """Generate picks.csv with full detail including price and shares."""
+    cols = ['rank', 'ticker', 'weight', 'sector', 'alpha_z', 'vol_blend', 'adv_20', 'price']
     available_cols = [c for c in cols if c in weights.columns]
     
     output = weights[available_cols].copy()
     output['weight'] = output['weight'].round(6)
     output['alpha_z'] = output['alpha_z'].round(4) if 'alpha_z' in output.columns else None
     
+    # Add target value and shares
+    if 'price' in output.columns:
+        output['price'] = output['price'].round(2)
+        output['target_value'] = (output['weight'] * portfolio_value).round(2)
+        output['shares'] = (output['target_value'] / output['price']).astype(int)
+    
     output.to_csv(output_path, index=False)
     logging.info(f"Wrote {len(output)} picks to {output_path}")
 
-def generate_trades_csv(trades, output_path):
+def generate_trades_csv(trades, target_weights, output_path):
     """Generate trades.csv with actionable orders."""
     if len(trades) == 0:
         logging.info("No trades to generate")
         return
     
+    # Build output dataframe
     output = trades[['ticker', 'action', 'delta_value', 'target_value', 'current_value']].copy()
     output.columns = ['ticker', 'action', 'trade_value', 'target_value', 'current_value']
     output['trade_value'] = output['trade_value'].round(2)
     output['target_value'] = output['target_value'].round(2)
     output['current_value'] = output['current_value'].round(2)
+    
+    # Add price and shares if available
+    if 'price' in trades.columns:
+        output['price'] = trades['price'].fillna(0).round(2)
+        output['shares'] = output.apply(
+            lambda row: int(row['trade_value'] / row['price']) if row['price'] > 0 else 0, 
+            axis=1
+        )
     
     output.to_csv(output_path, index=False)
     logging.info(f"Wrote {len(output)} trades to {output_path}")
@@ -601,8 +616,8 @@ def main():
     
     # Generate outputs
     logging.info("Generating output files...")
-    generate_picks_csv(weights, output_dir / "picks.csv")
-    generate_trades_csv(trades, output_dir / "trades.csv")
+    generate_picks_csv(weights, output_dir / "picks.csv", args.portfolio_value)
+    generate_trades_csv(trades, weights, output_dir / "trades.csv")
     generate_portfolio_summary(weights, regime, freshness, target_date, output_dir / "portfolio_summary.json")
     generate_schedule_json(target_date, output_dir / "schedule.json")
     

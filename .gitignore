@@ -48,5 +48,4 @@ Thumbs.db
 *.joblib
 .env
 .gitignore
-outputs/rebalance/2025-12-26/portfolio_summary.json
-outputs/rebalance/2025-12-26/schedule.json
+*.json
