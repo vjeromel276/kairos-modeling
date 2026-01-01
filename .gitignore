@@ -39,6 +39,7 @@ Thumbs.db
 
 # Logs
 *.log
+outputs/
 
 #models
 *.h5
