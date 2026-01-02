@@ -36,7 +36,7 @@ except ImportError:
 # CONFIGURATION
 # ============================================================================
 
-CONFIG = {
+V8_CONFIG = {
     # Portfolio construction
     "top_n": 75,                  # Number of stocks to hold
     "target_vol": 0.20,           # 20% annual vol target
@@ -53,6 +53,27 @@ CONFIG = {
     "vol_column": "vol_blend",
     "adv_column": "adv_20",
 }
+
+ML_CONFIG = {
+    # Portfolio construction
+    "top_n": 75,                  # Keep at 75 (best)
+    "target_vol": 0.25,           # CHANGED: 25% (was 20%)
+    "min_adv": 2_000_000,         # $2M minimum ADV
+    "max_position_pct": 0.03,     # 3% max per position
+    "max_sector_mult": 2.0,       # Max sector = 2x universe weight
+    
+    # Turnover control
+    "lambda_tc": 0.5,             # Turnover smoothing (0=all new, 1=no change)
+    "max_turnover": 0.30,         # 30% max turnover per rebalance
+    
+    # Alpha signal
+    "alpha_column": "alpha_ml_v2_clf",  # CHANGED: ML signal (was v8)
+    "vol_column": "vol_blend",
+    "adv_column": "adv_20",
+}
+
+# Select configuration
+CONFIG = ML_CONFIG.copy()
 
 # Known NYSE holidays for 2024-2026 (fallback if no market calendar)
 NYSE_HOLIDAYS = {
