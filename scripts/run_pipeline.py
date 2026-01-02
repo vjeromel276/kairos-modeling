@@ -10,7 +10,7 @@ Executes all pipeline phases in order:
   Phase 5: Feature Matrix Assembly
 
 Usage:
-    python run_pipeline.py --db /data/kairos.duckdb --universe /data/universe.csv --date 2025-12-26
+    python run_pipeline.py --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
     python run_pipeline.py --phase 2 --db /data/kairos.duckdb  # Run only Phase 2
     python run_pipeline.py --list  # Show all scripts in order
 """
@@ -68,6 +68,7 @@ PIPELINE = {
             ("scripts/features/build_momentum_factors_v2.py", ["--db", "{db}"]),
             ("scripts/features/build_insider_factors.py", ["--db", "{db}"]),
             ("scripts/features/institutional_factor_academic.py", ["--db", "{db}"]),
+            ("scripts/features/rebuild_feat_fundamental.py", ["--db", "{db}"]),
             # After each phase, add:
             # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ]
@@ -220,16 +221,16 @@ def main():
         epilog="""
 Examples:
   # Run full pipeline
-  python run_pipeline.py --db /data/kairos.duckdb --universe /data/universe.csv --date 2025-12-26
+  python run_pipeline.py --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
   
   # Run only Phase 2 (Technical Features)
   python run_pipeline.py --phase 2 --db /data/kairos.duckdb
   
   # Run Phases 3-5
-  python run_pipeline.py --start-phase 3 --end-phase 5 --db /data/kairos.duckdb --universe /data/universe.csv --date 2025-12-26
+  python run_pipeline.py --start-phase 3 --end-phase 5 --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
   
   # Dry run (show what would execute)
-  python run_pipeline.py --dry-run --db /data/kairos.duckdb --universe /data/universe.csv --date 2025-12-26
+  python run_pipeline.py --dry-run --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
   
   # List all scripts
   python run_pipeline.py --list
@@ -259,7 +260,7 @@ Examples:
         parser.error("--db is required")
     
     # Set defaults for optional args
-    universe = args.universe or "/data/universe.csv"
+    universe = args.universe or "scripts/sep_dataset/feature_sets/option_b_universe.csv"
     date = args.date or datetime.now().strftime("%Y-%m-%d")
     
     # Handle single phase vs range
