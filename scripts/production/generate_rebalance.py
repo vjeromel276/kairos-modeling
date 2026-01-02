@@ -556,7 +556,7 @@ def main():
     parser.add_argument('--date', help='Target date (default: latest in database)')
     parser.add_argument('--output-dir', default='outputs/rebalance', help='Output directory')
     parser.add_argument('--prior-holdings', help='Path to prior picks.csv for turnover smoothing')
-    parser.add_argument('--portfolio-value', type=float, default=1_000_000, help='Portfolio value in $')
+    parser.add_argument('--portfolio-value', type=float, default=100_000, help='Portfolio value in $')
     parser.add_argument('--check-only', action='store_true', help='Only check if rebalance day')
     parser.add_argument('--force', action='store_true', help='Generate even if not rebalance day')
     

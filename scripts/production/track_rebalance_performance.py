@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-track_rebalance_performance.py
+scripts/production/track_rebalance_performance.py
 ==============================
 Track portfolio performance between rebalance dates.
 
@@ -12,18 +12,18 @@ Compares picks from consecutive rebalance periods to calculate:
 
 Usage:
     # Compare two specific rebalance dates
-    python track_rebalance_performance.py \
+    python scripts/production/track_rebalance_performance.py \
         --picks-dir outputs/rebalance \
         --from-date 2025-12-19 \
         --to-date 2025-12-26
     
     # Track all rebalances in directory
-    python track_rebalance_performance.py \
+    python scripts/production/track_rebalance_performance.py \
         --picks-dir outputs/rebalance \
         --all
     
     # Fetch live prices for current holdings
-    python track_rebalance_performance.py \
+    python scripts/production/track_rebalance_performance.py \
         --picks-dir outputs/rebalance \
         --from-date 2025-12-26 \
         --live
