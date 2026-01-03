@@ -10,13 +10,13 @@ Modes:
 
 Usage:
     # Preview what would happen (no orders submitted)
-    python execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --preview
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --preview
     
     # Execute trades
-    python execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute
     
     # Execute with custom portfolio value (default uses account equity)
-    python execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute
 
 Environment:
     ALPACA_API_KEY: Your Alpaca API key

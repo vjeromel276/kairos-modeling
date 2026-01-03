@@ -132,7 +132,7 @@ def load_prediction_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     # Get all ticker/date pairs from feat_targets
     base_query = """
         SELECT DISTINCT ticker, date
-        FROM feat_targets
+        FROM sep_base_academic
         WHERE date >= '2015-01-01'
     """
     df = con.execute(base_query).fetchdf()

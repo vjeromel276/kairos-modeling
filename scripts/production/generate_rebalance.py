@@ -67,7 +67,7 @@ ML_CONFIG = {
     "max_turnover": 0.30,         # 30% max turnover per rebalance
     
     # Alpha signal
-    "alpha_column": "alpha_ml_v2_clf",  # CHANGED: ML signal (was v8)
+    "alpha_column": "alpha_ml_v2_tuned_clf",  # CHANGED: ML signal (was v8)
     "vol_column": "vol_blend",
     "adv_column": "adv_20",
 }
