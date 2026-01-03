@@ -6,14 +6,21 @@ Execute Kairos rebalance picks via Alpaca API.
 
 Modes:
   1. Initial portfolio (no current positions) - buys all picks
-  2. Rebalance (existing positions) - uses trades.csv for delta
+  2. Rebalance (existing positions) - calculates delta from Alpaca positions
+
+Order Types:
+  - Default: Market orders (immediate fill during market hours)
+  - --moo: Market-on-Open orders (queue for next market open)
 
 Usage:
     # Preview what would happen (no orders submitted)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --preview
     
-    # Execute trades
+    # Execute trades immediately (market hours)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute
+    
+    # Execute as Market-on-Open (submit Friday night, fills Monday 9:30 AM)
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --moo
     
     # Execute with custom portfolio value (default uses account equity)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute
@@ -146,13 +153,15 @@ def calculate_orders(
     return sells + buys
 
 
-def preview_orders(orders: List[Dict], account_info: Dict):
+def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False):
     """Print preview of orders without executing."""
     print("\n" + "=" * 70)
     print("ORDER PREVIEW (no orders will be submitted)")
     print("=" * 70)
     
-    print(f"\nAccount Status: {account_info['status']}")
+    order_type = "Market-on-Open (MOO)" if use_moo else "Market (immediate)"
+    print(f"\nOrder Type: {order_type}")
+    print(f"Account Status: {account_info['status']}")
     print(f"Portfolio Value: ${account_info['portfolio_value']:,.2f}")
     print(f"Cash: ${account_info['cash']:,.2f}")
     print(f"Buying Power: ${account_info['buying_power']:,.2f}")
@@ -184,22 +193,39 @@ def preview_orders(orders: List[Dict], account_info: Dict):
         print(f"\n⚠️  WARNING: Total buys (${total_buy:,.2f}) exceed buying power (${account_info['buying_power']:,.2f})")
         print("    Orders may be rejected or partially filled.")
     
+    if use_moo:
+        print(f"\n📅 MOO orders will execute at next market open (9:30 AM ET)")
+    
     print("\n" + "=" * 70)
     print("To execute these orders, run with --execute flag")
+    if not use_moo:
+        print("Add --moo flag for Market-on-Open orders")
     print("=" * 70 + "\n")
 
 
-def execute_orders(api, orders: List[Dict], dry_run: bool = False) -> List[Dict]:
+def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool = False) -> List[Dict]:
     """
     Submit orders to Alpaca.
+    
+    Args:
+        api: Alpaca API connection
+        orders: List of order dicts
+        dry_run: If True, don't actually submit
+        use_moo: If True, use Market-on-Open (time_in_force="opg")
     
     Returns list of order results.
     """
     results = []
     
+    order_type = "MOO" if use_moo else "MARKET"
+    time_in_force = "opg" if use_moo else "day"
+    
     print("\n" + "=" * 70)
-    print("EXECUTING ORDERS")
+    print(f"EXECUTING ORDERS ({order_type})")
     print("=" * 70 + "\n")
+    
+    if use_moo:
+        print("📅 Orders will be queued for next market open (9:30 AM ET)\n")
     
     for i, order in enumerate(orders, 1):
         symbol = order["symbol"]
@@ -217,13 +243,13 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False) -> List[Dict]
             continue
         
         try:
-            # Submit market order
+            # Submit order
             submitted = api.submit_order(
                 symbol=symbol,
                 qty=qty,
                 side=side,
                 type="market",
-                time_in_force="day",  # Good for the day
+                time_in_force=time_in_force,
             )
             print(f"✓ Order ID: {submitted.id}")
             results.append({
@@ -232,6 +258,8 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False) -> List[Dict]
                 "qty": qty,
                 "order_id": submitted.id,
                 "status": "submitted",
+                "order_type": order_type,
+                "time_in_force": time_in_force,
             })
         except Exception as e:
             print(f"✗ FAILED: {e}")
@@ -248,8 +276,12 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False) -> List[Dict]
     failed = len([r for r in results if r["status"] == "failed"])
     
     print(f"\n--- EXECUTION SUMMARY ---")
+    print(f"Order Type: {order_type}")
     print(f"Submitted: {submitted}")
     print(f"Failed: {failed}")
+    
+    if use_moo and submitted > 0:
+        print(f"\n📅 {submitted} orders queued for next market open")
     
     return results
 
@@ -266,6 +298,7 @@ def main():
     parser.add_argument("--preview", action="store_true", help="Preview orders without executing")
     parser.add_argument("--execute", action="store_true", help="Actually submit orders")
     parser.add_argument("--dry-run", action="store_true", help="Go through motions but don't submit")
+    parser.add_argument("--moo", action="store_true", help="Use Market-on-Open orders (execute at next market open)")
     
     args = parser.parse_args()
     
@@ -302,18 +335,21 @@ def main():
     print(f"Calculated {len(orders)} orders")
     
     if args.preview:
-        preview_orders(orders, account_info)
+        preview_orders(orders, account_info, use_moo=args.moo)
     elif args.execute:
         # Confirm before executing
-        print(f"\n⚠️  About to submit {len(orders)} orders to Alpaca")
+        order_type = "MOO (Market-on-Open)" if args.moo else "MARKET (immediate)"
+        print(f"\n⚠️  About to submit {len(orders)} {order_type} orders to Alpaca")
         print(f"    Account: {ALPACA_BASE_URL}")
+        if args.moo:
+            print(f"    Execution: Next market open (9:30 AM ET)")
         confirm = input("    Type 'YES' to confirm: ")
         
         if confirm != "YES":
             print("Cancelled.")
             sys.exit(0)
         
-        results = execute_orders(api, orders, dry_run=args.dry_run)
+        results = execute_orders(api, orders, dry_run=args.dry_run, use_moo=args.moo)
         
         # Save results
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
