@@ -100,6 +100,8 @@ def main():
         'feat_composite_v7',  # 50/50 blend - BEST
         'feat_composite_v32b',   # new CS+CL v2 blend
         'feat_composite_v8',        # still your CS+CL v1 blend for now
+        'feat_alpha_ml_xgb_v2',      # base model
+        'feat_alpha_ml_xgb_v2_tuned', # tuned model
     ]
     
     # Only include tables that exist

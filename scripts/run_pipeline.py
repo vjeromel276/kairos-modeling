@@ -113,19 +113,23 @@ PIPELINE = {
             # Blended composites (depend on v33_regime, quality, value)
             ("scripts/features/build_alpha_composite_v7.py", ["--db", "{db}"]),
             ("scripts/features/build_alpha_composite_v8.py", ["--db", "{db}"]),
-            # Feature matrix assembly (last step)
-            (
-                "scripts/build_feature_matrix_v2.py",
-                ["--db", "{db}", "--date", "{date}", "--universe", "{universe}"],
-            ),
-            # After each phase, add:
-            # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ],
     },
     6: {
         "name": "ML Predictions",
         "scripts": [
             ("scripts/ml/generate_ml_predictions_v2.py", ["--db", "{db}"]),
+            ("scripts/ml/generate_ml_predictions_v2_tuned.py", ["--db", "{db}"]),
+        ],
+    },
+    7: {
+        "name": "Feature Matrix Assembly",
+        "scripts": [
+        # Feature matrix assembly (last step)
+            (
+                "scripts/build_feature_matrix_v2.py",
+                ["--db", "{db}", "--date", "{date}", "--universe", "{universe}"],
+            ),
             # After each phase, add:
             # ("scripts/fix_all_date_types.py", ["--db", "{db}"]),
         ],
@@ -213,7 +217,7 @@ def run_full_pipeline(
     universe: str,
     date: str,
     start_phase: int = 1,
-    end_phase: int = 5,
+    end_phase: int = 7,
     dry_run: bool = False,
 ) -> bool:
     """Run the complete pipeline or a range of phases."""
@@ -253,19 +257,19 @@ def main():
         epilog="""
 Examples:
   # Run full pipeline
-  python run_pipeline.py --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
+  python scripts/run_pipeline.py --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
   
   # Run only Phase 2 (Technical Features)
-  python run_pipeline.py --phase 2 --db /data/kairos.duckdb
+  python scripts/run_pipeline.py --phase 2 --db /data/kairos.duckdb
   
   # Run Phases 3-5
-  python run_pipeline.py --start-phase 3 --end-phase 5 --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
+  python scripts/run_pipeline.py --start-phase 3 --end-phase 5 --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
   
   # Dry run (show what would execute)
-  python run_pipeline.py --dry-run --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
+  python scripts/run_pipeline.py --dry-run --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
   
   # List all scripts
-  python run_pipeline.py --list
+  python scripts/run_pipeline.py --list
 """,
     )
 
@@ -273,12 +277,11 @@ Examples:
     parser.add_argument("--universe", type=str, help="Path to universe CSV file")
     parser.add_argument("--date", type=str, help="Date for feature matrix (YYYY-MM-DD)")
 
-    parser.add_argument("--phase", type=int, help="Run only this phase (1-6)")
+    parser.add_argument("--phase", type=int, help="Run only this phase (1-7)")
     parser.add_argument(
         "--start-phase", type=int, default=1, help="Start from this phase"
     )
-    parser.add_argument("--end-phase", type=int, default=6, help="End at this phase")
-
+    parser.add_argument("--end-phase", type=int, default=7, help="End at this phase")
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would run without executing"
     )

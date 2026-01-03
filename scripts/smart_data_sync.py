@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-smart_data_sync.py
+scripts/smart_data_sync.py
 ==================
 Intelligently sync Sharadar data tables with the API.
 
@@ -18,16 +18,16 @@ Tables supported:
 
 Usage:
     # Check and sync all tables
-    python smart_data_sync.py --db data/kairos.duckdb
+    python scripts/smart_data_sync.py --db data/kairos.duckdb
     
     # Check only (don't download)
-    python smart_data_sync.py --db data/kairos.duckdb --check-only
+    python scripts/smart_data_sync.py --db data/kairos.duckdb --check-only
     
     # Sync specific tables
-    python smart_data_sync.py --db data/kairos.duckdb --tables SEP DAILY
+    python scripts/smart_data_sync.py --db data/kairos.duckdb --tables SEP DAILY
     
     # Force download even if up to date
-    python smart_data_sync.py --db data/kairos.duckdb --force
+    python scripts/smart_data_sync.py --db data/kairos.duckdb --force
 
 Environment:
     NASDAQ_DATA_LINK_API_KEY: Your Nasdaq Data Link API key
@@ -470,16 +470,16 @@ def main():
         epilog="""
 Examples:
   # Check all tables for new data and sync
-  python smart_data_sync.py --db data/kairos.duckdb
+  python scripts/smart_data_sync.py --db data/kairos.duckdb
   
   # Check only (show what would be updated)
-  python smart_data_sync.py --db data/kairos.duckdb --check-only
+  python scripts/smart_data_sync.py --db data/kairos.duckdb --check-only
   
   # Sync only SEP and DAILY
-  python smart_data_sync.py --db data/kairos.duckdb --tables SEP DAILY
+  python scripts/smart_data_sync.py --db data/kairos.duckdb --tables SEP DAILY
   
   # Force re-download even if up to date
-  python smart_data_sync.py --db data/kairos.duckdb --tables SF1 --force
+  python scripts/smart_data_sync.py --db data/kairos.duckdb --tables SF1 --force
 """
     )
     
