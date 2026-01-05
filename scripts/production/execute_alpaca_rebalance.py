@@ -9,27 +9,31 @@ Modes:
   2. Rebalance (existing positions) - calculates delta from Alpaca positions
 
 Order Types:
-  - Default: Market orders (immediate fill during market hours)
-  - --moo: Market-on-Open orders (queue for next market open)
-  - --loo: Limit-on-Open orders with 1% buffer (recommended for weekly rebalance)
-           Buy limit = Friday close × 1.01
-           Sell limit = Friday close × 0.99
+  - Default: Market-on-Open orders (submit Friday night, fills Monday 9:30 AM)
+  - --intraday: Market orders for immediate fill during market hours
+  - --max-gap X: Skip stocks that gapped more than X% from Friday close (disaster protection)
+
+Workflow:
+  Friday after close:
+    1. Run pipeline, generate picks.csv
+    2. Submit MOO orders: python execute_alpaca_rebalance.py --picks picks.csv --execute
+    3. Orders queue for Monday 9:30 AM open auction
 
 Usage:
     # Preview what would happen (no orders submitted)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --preview
     
-    # Execute trades immediately (market hours)
+    # Execute as Market-on-Open (DEFAULT - submit Friday night, fills Monday 9:30 AM)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute
     
-    # Execute as Market-on-Open (submit Friday night, fills Monday 9:30 AM)
-    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --moo
+    # Execute with disaster protection (skip stocks gapping >5%)
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --max-gap 5
     
-    # Execute as Limit-on-Open with 1% slippage protection (RECOMMENDED)
-    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --loo
+    # Execute immediately during market hours (catch-up orders)
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --intraday
     
     # Execute with custom portfolio value (default uses account equity)
-    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute --loo
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute
 
 Environment:
     ALPACA_API_KEY: Your Alpaca API key
@@ -49,8 +53,8 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PK347Y7OMCULH3KC5MALII6ZWP")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "7vceesTCANBZXXjMjEuGs1a8N1YjkAudj4aKUUXofRHB")
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
-# LOO slippage buffer (1% = 0.01)
-LOO_SLIPPAGE_PCT = 0.01
+# Default max gap for disaster protection (None = no limit)
+DEFAULT_MAX_GAP_PCT = None
 
 
 def get_api():
@@ -110,16 +114,46 @@ def format_limit_price(price: float) -> str:
         return f"{price:.4f}"
 
 
-def calculate_limit_price(ref_price: float, side: str) -> float:
+def get_current_prices(api, symbols: List[str]) -> Dict[str, float]:
     """
-    Calculate limit price with slippage buffer.
-    - Buy: ref_price × 1.01 (willing to pay up to 1% more)
-    - Sell: ref_price × 0.99 (willing to accept up to 1% less)
+    Fetch current/latest prices for symbols to check gap from reference price.
+    Returns dict of symbol -> current price.
     """
+    if not symbols:
+        return {}
+    
+    prices = {}
+    try:
+        # Get latest trades for all symbols
+        trades = api.get_latest_trades(symbols)
+        for symbol, trade in trades.items():
+            prices[symbol] = float(trade.price)
+    except Exception as e:
+        print(f"Warning: Could not fetch current prices: {e}")
+    
+    return prices
+
+
+def check_gap_exceeded(ref_price: float, current_price: float, max_gap_pct: float, side: str) -> Tuple[bool, float]:
+    """
+    Check if current price has gapped beyond max_gap_pct from reference price.
+    
+    For buys: reject if current_price > ref_price * (1 + max_gap_pct)
+    For sells: reject if current_price < ref_price * (1 - max_gap_pct)
+    
+    Returns (exceeded: bool, gap_pct: float)
+    """
+    if ref_price <= 0:
+        return False, 0.0
+    
+    gap_pct = (current_price - ref_price) / ref_price * 100
+    
     if side == "buy":
-        return ref_price * (1 + LOO_SLIPPAGE_PCT)
+        exceeded = gap_pct > max_gap_pct
     else:  # sell
-        return ref_price * (1 - LOO_SLIPPAGE_PCT)
+        exceeded = gap_pct < -max_gap_pct
+    
+    return exceeded, gap_pct
 
 
 def calculate_orders(
@@ -190,20 +224,20 @@ def calculate_orders(
     return sells + buys
 
 
-def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False, use_loo: bool = False):
+def preview_orders(orders: List[Dict], account_info: Dict, intraday: bool = False, max_gap_pct: float = None):
     """Print preview of orders without executing."""
     print("\n" + "=" * 70)
     print("ORDER PREVIEW (no orders will be submitted)")
     print("=" * 70)
     
-    if use_loo:
-        order_type = f"Limit-on-Open (LOO) with {LOO_SLIPPAGE_PCT*100:.0f}% buffer"
-    elif use_moo:
-        order_type = "Market-on-Open (MOO)"
-    else:
+    if intraday:
         order_type = "Market (immediate)"
+    else:
+        order_type = "Market-on-Open (MOO)"
     
     print(f"\nOrder Type: {order_type}")
+    if max_gap_pct is not None:
+        print(f"Max Gap Protection: {max_gap_pct}%")
     print(f"Account Status: {account_info['status']}")
     print(f"Portfolio Value: ${account_info['portfolio_value']:,.2f}")
     print(f"Cash: ${account_info['cash']:,.2f}")
@@ -217,21 +251,13 @@ def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False
     
     print(f"\n--- SELLS ({len(sells)} orders, ${total_sell:,.2f} total) ---")
     for o in sells[:10]:  # Show top 10
-        if use_loo:
-            limit = calculate_limit_price(o["ref_price"], "sell")
-            print(f"  SELL {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} limit ${limit:>8.2f} ({o['reason']})")
-        else:
-            print(f"  SELL {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
+        print(f"  SELL {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
     if len(sells) > 10:
         print(f"  ... and {len(sells) - 10} more sells")
     
     print(f"\n--- BUYS ({len(buys)} orders, ${total_buy:,.2f} total) ---")
     for o in buys[:15]:  # Show top 15
-        if use_loo:
-            limit = calculate_limit_price(o["ref_price"], "buy")
-            print(f"  BUY  {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} limit ${limit:>8.2f} ({o['reason']})")
-        else:
-            print(f"  BUY  {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
+        print(f"  BUY  {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
     if len(buys) > 15:
         print(f"  ... and {len(buys) - 15} more buys")
     
@@ -244,21 +270,20 @@ def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False
         print(f"\n⚠️  WARNING: Total buys (${total_buy:,.2f}) exceed buying power (${account_info['buying_power']:,.2f})")
         print("    Orders may be rejected or partially filled.")
     
-    if use_loo:
-        print(f"\n📅 LOO orders will execute at next market open (9:30 AM ET)")
-        print(f"   Orders that gap beyond {LOO_SLIPPAGE_PCT*100:.0f}% will NOT fill")
-    elif use_moo:
+    if not intraday:
         print(f"\n📅 MOO orders will execute at next market open (9:30 AM ET)")
+    
+    if max_gap_pct is not None:
+        print(f"🛡️  Disaster protection: Orders skipped if gap > {max_gap_pct}% from reference price")
     
     print("\n" + "=" * 70)
     print("To execute these orders, run with --execute flag")
-    if not use_moo and not use_loo:
-        print("Add --loo flag for Limit-on-Open orders (recommended)")
-        print("Add --moo flag for Market-on-Open orders")
+    if not intraday:
+        print("Add --intraday flag for immediate market orders")
     print("=" * 70 + "\n")
 
 
-def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool = False, use_loo: bool = False) -> List[Dict]:
+def execute_orders(api, orders: List[Dict], dry_run: bool = False, intraday: bool = False, max_gap_pct: float = None) -> List[Dict]:
     """
     Submit orders to Alpaca.
     
@@ -266,35 +291,37 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
         api: Alpaca API connection
         orders: List of order dicts
         dry_run: If True, don't actually submit
-        use_moo: If True, use Market-on-Open (time_in_force="opg")
-        use_loo: If True, use Limit-on-Open (type="limit", time_in_force="opg")
+        intraday: If True, use immediate market orders; else MOO
+        max_gap_pct: If set, skip orders where current price gapped beyond this % from ref_price
     
     Returns list of order results.
     """
     results = []
+    skipped_gap = 0
     
-    if use_loo:
-        order_type_label = "LOO"
-        order_type = "limit"
-        time_in_force = "opg"
-    elif use_moo:
-        order_type_label = "MOO"
-        order_type = "market"
-        time_in_force = "opg"
-    else:
+    if intraday:
         order_type_label = "MARKET"
         order_type = "market"
         time_in_force = "day"
+    else:
+        order_type_label = "MOO"
+        order_type = "market"
+        time_in_force = "opg"
     
     print("\n" + "=" * 70)
     print(f"EXECUTING ORDERS ({order_type_label})")
     print("=" * 70 + "\n")
     
-    if use_loo:
-        print(f"📅 Limit-on-Open orders with {LOO_SLIPPAGE_PCT*100:.0f}% buffer")
-        print(f"   Will execute at next market open (9:30 AM ET)\n")
-    elif use_moo:
+    if not intraday:
         print("📅 Orders will be queued for next market open (9:30 AM ET)\n")
+    
+    # If max_gap protection enabled and intraday, fetch current prices
+    current_prices = {}
+    if max_gap_pct is not None and intraday:
+        symbols = [o["symbol"] for o in orders]
+        print(f"Fetching current prices for gap check (max {max_gap_pct}%)...")
+        current_prices = get_current_prices(api, symbols)
+        print(f"Got prices for {len(current_prices)} symbols\n")
     
     for i, order in enumerate(orders, 1):
         symbol = order["symbol"]
@@ -305,13 +332,24 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
         if qty <= 0:
             continue
         
-        # Calculate limit price for LOO
-        if use_loo:
-            limit_price = calculate_limit_price(ref_price, side)
-            limit_price_str = format_limit_price(limit_price)
-            print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol} @ limit ${limit_price_str}...", end=" ")
-        else:
-            print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol}...", end=" ")
+        # Check gap protection (only for intraday orders with current prices)
+        if max_gap_pct is not None and symbol in current_prices:
+            exceeded, gap_pct = check_gap_exceeded(ref_price, current_prices[symbol], max_gap_pct, side)
+            if exceeded:
+                print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol}... ⏭️ SKIPPED (gap {gap_pct:+.1f}% > {max_gap_pct}%)")
+                results.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "status": "skipped_gap",
+                    "gap_pct": gap_pct,
+                    "ref_price": ref_price,
+                    "current_price": current_prices[symbol],
+                })
+                skipped_gap += 1
+                continue
+        
+        print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol}...", end=" ")
         
         if dry_run:
             print("(dry run - skipped)")
@@ -328,10 +366,6 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
                 "time_in_force": time_in_force,
             }
             
-            # Add limit price for LOO orders
-            if use_loo:
-                order_params["limit_price"] = limit_price_str
-            
             # Submit order
             submitted = api.submit_order(**order_params)
             print(f"✓ Order ID: {submitted.id}")
@@ -344,10 +378,8 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
                 "status": "submitted",
                 "order_type": order_type_label,
                 "time_in_force": time_in_force,
+                "ref_price": ref_price,
             }
-            if use_loo:
-                result["limit_price"] = float(limit_price_str)
-                result["ref_price"] = ref_price
             
             results.append(result)
             
@@ -368,13 +400,12 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
     print(f"\n--- EXECUTION SUMMARY ---")
     print(f"Order Type: {order_type_label}")
     print(f"Submitted: {submitted}")
+    if skipped_gap > 0:
+        print(f"Skipped (gap exceeded): {skipped_gap}")
     print(f"Failed: {failed}")
     
-    if use_loo and submitted > 0:
-        print(f"\n📅 {submitted} LOO orders queued for next market open")
-        print(f"   Non-fills (gaps > {LOO_SLIPPAGE_PCT*100:.0f}%) will expire - check status after open")
-    elif use_moo and submitted > 0:
-        print(f"\n📅 {submitted} orders queued for next market open")
+    if not intraday and submitted > 0:
+        print(f"\n📅 {submitted} MOO orders queued for next market open")
     
     return results
 
@@ -391,17 +422,13 @@ def main():
     parser.add_argument("--preview", action="store_true", help="Preview orders without executing")
     parser.add_argument("--execute", action="store_true", help="Actually submit orders")
     parser.add_argument("--dry-run", action="store_true", help="Go through motions but don't submit")
-    parser.add_argument("--moo", action="store_true", help="Use Market-on-Open orders (execute at next market open)")
-    parser.add_argument("--loo", action="store_true", help="Use Limit-on-Open orders with 1%% buffer (recommended)")
+    parser.add_argument("--intraday", action="store_true", help="Use immediate market orders (for catch-up during market hours)")
+    parser.add_argument("--max-gap", type=float, metavar="PCT", help="Skip orders if price gapped more than PCT%% from reference (disaster protection)")
     
     args = parser.parse_args()
     
     if not args.preview and not args.execute:
         print("Error: Must specify --preview or --execute")
-        sys.exit(1)
-    
-    if args.moo and args.loo:
-        print("Error: Cannot use both --moo and --loo. Choose one.")
         sys.exit(1)
     
     # Connect to Alpaca
@@ -433,33 +460,33 @@ def main():
     print(f"Calculated {len(orders)} orders")
     
     if args.preview:
-        preview_orders(orders, account_info, use_moo=args.moo, use_loo=args.loo)
+        preview_orders(orders, account_info, intraday=args.intraday, max_gap_pct=args.max_gap)
     elif args.execute:
         # Confirm before executing
-        if args.loo:
-            order_type = f"LOO (Limit-on-Open, {LOO_SLIPPAGE_PCT*100:.0f}% buffer)"
-        elif args.moo:
-            order_type = "MOO (Market-on-Open)"
-        else:
+        if args.intraday:
             order_type = "MARKET (immediate)"
+        else:
+            order_type = "MOO (Market-on-Open)"
         
         print(f"\n⚠️  About to submit {len(orders)} {order_type} orders to Alpaca")
         print(f"    Account: {ALPACA_BASE_URL}")
-        if args.moo or args.loo:
+        if not args.intraday:
             print(f"    Execution: Next market open (9:30 AM ET)")
-        if args.loo:
-            print(f"    Non-fills: Orders gapping > {LOO_SLIPPAGE_PCT*100:.0f}% will expire")
+        if args.max_gap:
+            print(f"    Max gap protection: {args.max_gap}%")
         confirm = input("    Type 'YES' to confirm: ")
         
         if confirm != "YES":
             print("Cancelled.")
             sys.exit(0)
         
-        results = execute_orders(api, orders, dry_run=args.dry_run, use_moo=args.moo, use_loo=args.loo)
+        results = execute_orders(api, orders, dry_run=args.dry_run, intraday=args.intraday, max_gap_pct=args.max_gap)
         
-        # Save results
+        # Save results in same directory as picks.csv
+        picks_dir = os.path.dirname(args.picks)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_file = f"alpaca_orders_{timestamp}.csv"
+        results_filename = f"alpaca_orders_{timestamp}.csv"
+        results_file = os.path.join(picks_dir, results_filename) if picks_dir else results_filename
         pd.DataFrame(results).to_csv(results_file, index=False)
         print(f"\nOrder results saved to: {results_file}")
 
