@@ -11,6 +11,9 @@ Modes:
 Order Types:
   - Default: Market orders (immediate fill during market hours)
   - --moo: Market-on-Open orders (queue for next market open)
+  - --loo: Limit-on-Open orders with 1% buffer (recommended for weekly rebalance)
+           Buy limit = Friday close × 1.01
+           Sell limit = Friday close × 0.99
 
 Usage:
     # Preview what would happen (no orders submitted)
@@ -22,8 +25,11 @@ Usage:
     # Execute as Market-on-Open (submit Friday night, fills Monday 9:30 AM)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --moo
     
+    # Execute as Limit-on-Open with 1% slippage protection (RECOMMENDED)
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --loo
+    
     # Execute with custom portfolio value (default uses account equity)
-    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute --loo
 
 Environment:
     ALPACA_API_KEY: Your Alpaca API key
@@ -42,6 +48,9 @@ from typing import Dict, List, Tuple
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PK347Y7OMCULH3KC5MALII6ZWP")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "7vceesTCANBZXXjMjEuGs1a8N1YjkAudj4aKUUXofRHB")
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+# LOO slippage buffer (1% = 0.01)
+LOO_SLIPPAGE_PCT = 0.01
 
 
 def get_api():
@@ -89,6 +98,30 @@ def load_picks(picks_path: str, portfolio_value: float = None) -> pd.DataFrame:
     return df
 
 
+def format_limit_price(price: float) -> str:
+    """
+    Format limit price according to Alpaca sub-penny rules.
+    - Price >= $1.00: max 2 decimal places
+    - Price < $1.00: max 4 decimal places
+    """
+    if price >= 1.0:
+        return f"{price:.2f}"
+    else:
+        return f"{price:.4f}"
+
+
+def calculate_limit_price(ref_price: float, side: str) -> float:
+    """
+    Calculate limit price with slippage buffer.
+    - Buy: ref_price × 1.01 (willing to pay up to 1% more)
+    - Sell: ref_price × 0.99 (willing to accept up to 1% less)
+    """
+    if side == "buy":
+        return ref_price * (1 + LOO_SLIPPAGE_PCT)
+    else:  # sell
+        return ref_price * (1 - LOO_SLIPPAGE_PCT)
+
+
 def calculate_orders(
     picks: pd.DataFrame, 
     current_positions: Dict[str, Dict],
@@ -97,16 +130,17 @@ def calculate_orders(
     """
     Calculate orders needed to rebalance to target.
     
-    Returns list of orders: [{symbol, side, qty, notional_value}, ...]
+    Returns list of orders: [{symbol, side, qty, notional_value, ref_price}, ...]
     """
     orders = []
     
-    # Build target position map
+    # Build target position map with reference prices
     target_positions = {
         row["ticker"]: {
             "shares": int(row["shares"]),
             "target_value": row["target_value"],
             "weight": row["weight"],
+            "ref_price": row["price"],  # Friday close price for LOO
         }
         for _, row in picks.iterrows()
     }
@@ -114,15 +148,19 @@ def calculate_orders(
     # Calculate sells first (positions we need to reduce or exit)
     for symbol, pos in current_positions.items():
         current_qty = pos["qty"]
-        target_qty = target_positions.get(symbol, {}).get("shares", 0)
+        target = target_positions.get(symbol, {})
+        target_qty = target.get("shares", 0)
         
         if current_qty > target_qty:
             sell_qty = current_qty - target_qty
+            # Use current price for sells of positions not in picks
+            ref_price = target.get("ref_price", pos["current_price"])
             orders.append({
                 "symbol": symbol,
                 "side": "sell",
                 "qty": sell_qty,
                 "notional_value": sell_qty * pos["current_price"],
+                "ref_price": ref_price,
                 "reason": "exit" if target_qty == 0 else "reduce",
             })
     
@@ -133,14 +171,13 @@ def calculate_orders(
         
         if target_qty > current_qty:
             buy_qty = target_qty - current_qty
-            # Estimate price from picks
-            pick_row = picks[picks["ticker"] == symbol].iloc[0]
-            est_price = pick_row["price"]
+            ref_price = target["ref_price"]
             orders.append({
                 "symbol": symbol,
                 "side": "buy",
                 "qty": buy_qty,
-                "notional_value": buy_qty * est_price,
+                "notional_value": buy_qty * ref_price,
+                "ref_price": ref_price,
                 "reason": "new" if current_qty == 0 else "increase",
             })
     
@@ -153,13 +190,19 @@ def calculate_orders(
     return sells + buys
 
 
-def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False):
+def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False, use_loo: bool = False):
     """Print preview of orders without executing."""
     print("\n" + "=" * 70)
     print("ORDER PREVIEW (no orders will be submitted)")
     print("=" * 70)
     
-    order_type = "Market-on-Open (MOO)" if use_moo else "Market (immediate)"
+    if use_loo:
+        order_type = f"Limit-on-Open (LOO) with {LOO_SLIPPAGE_PCT*100:.0f}% buffer"
+    elif use_moo:
+        order_type = "Market-on-Open (MOO)"
+    else:
+        order_type = "Market (immediate)"
+    
     print(f"\nOrder Type: {order_type}")
     print(f"Account Status: {account_info['status']}")
     print(f"Portfolio Value: ${account_info['portfolio_value']:,.2f}")
@@ -174,13 +217,21 @@ def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False
     
     print(f"\n--- SELLS ({len(sells)} orders, ${total_sell:,.2f} total) ---")
     for o in sells[:10]:  # Show top 10
-        print(f"  SELL {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
+        if use_loo:
+            limit = calculate_limit_price(o["ref_price"], "sell")
+            print(f"  SELL {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} limit ${limit:>8.2f} ({o['reason']})")
+        else:
+            print(f"  SELL {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
     if len(sells) > 10:
         print(f"  ... and {len(sells) - 10} more sells")
     
     print(f"\n--- BUYS ({len(buys)} orders, ${total_buy:,.2f} total) ---")
     for o in buys[:15]:  # Show top 15
-        print(f"  BUY  {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
+        if use_loo:
+            limit = calculate_limit_price(o["ref_price"], "buy")
+            print(f"  BUY  {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} limit ${limit:>8.2f} ({o['reason']})")
+        else:
+            print(f"  BUY  {o['qty']:>6} {o['symbol']:<6} ~${o['notional_value']:>10,.2f} ({o['reason']})")
     if len(buys) > 15:
         print(f"  ... and {len(buys) - 15} more buys")
     
@@ -193,17 +244,21 @@ def preview_orders(orders: List[Dict], account_info: Dict, use_moo: bool = False
         print(f"\n⚠️  WARNING: Total buys (${total_buy:,.2f}) exceed buying power (${account_info['buying_power']:,.2f})")
         print("    Orders may be rejected or partially filled.")
     
-    if use_moo:
+    if use_loo:
+        print(f"\n📅 LOO orders will execute at next market open (9:30 AM ET)")
+        print(f"   Orders that gap beyond {LOO_SLIPPAGE_PCT*100:.0f}% will NOT fill")
+    elif use_moo:
         print(f"\n📅 MOO orders will execute at next market open (9:30 AM ET)")
     
     print("\n" + "=" * 70)
     print("To execute these orders, run with --execute flag")
-    if not use_moo:
+    if not use_moo and not use_loo:
+        print("Add --loo flag for Limit-on-Open orders (recommended)")
         print("Add --moo flag for Market-on-Open orders")
     print("=" * 70 + "\n")
 
 
-def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool = False) -> List[Dict]:
+def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool = False, use_loo: bool = False) -> List[Dict]:
     """
     Submit orders to Alpaca.
     
@@ -212,30 +267,51 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
         orders: List of order dicts
         dry_run: If True, don't actually submit
         use_moo: If True, use Market-on-Open (time_in_force="opg")
+        use_loo: If True, use Limit-on-Open (type="limit", time_in_force="opg")
     
     Returns list of order results.
     """
     results = []
     
-    order_type = "MOO" if use_moo else "MARKET"
-    time_in_force = "opg" if use_moo else "day"
+    if use_loo:
+        order_type_label = "LOO"
+        order_type = "limit"
+        time_in_force = "opg"
+    elif use_moo:
+        order_type_label = "MOO"
+        order_type = "market"
+        time_in_force = "opg"
+    else:
+        order_type_label = "MARKET"
+        order_type = "market"
+        time_in_force = "day"
     
     print("\n" + "=" * 70)
-    print(f"EXECUTING ORDERS ({order_type})")
+    print(f"EXECUTING ORDERS ({order_type_label})")
     print("=" * 70 + "\n")
     
-    if use_moo:
+    if use_loo:
+        print(f"📅 Limit-on-Open orders with {LOO_SLIPPAGE_PCT*100:.0f}% buffer")
+        print(f"   Will execute at next market open (9:30 AM ET)\n")
+    elif use_moo:
         print("📅 Orders will be queued for next market open (9:30 AM ET)\n")
     
     for i, order in enumerate(orders, 1):
         symbol = order["symbol"]
         side = order["side"]
         qty = order["qty"]
+        ref_price = order.get("ref_price", 0)
         
         if qty <= 0:
             continue
         
-        print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol}...", end=" ")
+        # Calculate limit price for LOO
+        if use_loo:
+            limit_price = calculate_limit_price(ref_price, side)
+            limit_price_str = format_limit_price(limit_price)
+            print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol} @ limit ${limit_price_str}...", end=" ")
+        else:
+            print(f"[{i}/{len(orders)}] {side.upper()} {qty} {symbol}...", end=" ")
         
         if dry_run:
             print("(dry run - skipped)")
@@ -243,24 +319,38 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
             continue
         
         try:
+            # Build order parameters
+            order_params = {
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "type": order_type,
+                "time_in_force": time_in_force,
+            }
+            
+            # Add limit price for LOO orders
+            if use_loo:
+                order_params["limit_price"] = limit_price_str
+            
             # Submit order
-            submitted = api.submit_order(
-                symbol=symbol,
-                qty=qty,
-                side=side,
-                type="market",
-                time_in_force=time_in_force,
-            )
+            submitted = api.submit_order(**order_params)
             print(f"✓ Order ID: {submitted.id}")
-            results.append({
+            
+            result = {
                 "symbol": symbol,
                 "side": side,
                 "qty": qty,
                 "order_id": submitted.id,
                 "status": "submitted",
-                "order_type": order_type,
+                "order_type": order_type_label,
                 "time_in_force": time_in_force,
-            })
+            }
+            if use_loo:
+                result["limit_price"] = float(limit_price_str)
+                result["ref_price"] = ref_price
+            
+            results.append(result)
+            
         except Exception as e:
             print(f"✗ FAILED: {e}")
             results.append({
@@ -276,11 +366,14 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, use_moo: bool
     failed = len([r for r in results if r["status"] == "failed"])
     
     print(f"\n--- EXECUTION SUMMARY ---")
-    print(f"Order Type: {order_type}")
+    print(f"Order Type: {order_type_label}")
     print(f"Submitted: {submitted}")
     print(f"Failed: {failed}")
     
-    if use_moo and submitted > 0:
+    if use_loo and submitted > 0:
+        print(f"\n📅 {submitted} LOO orders queued for next market open")
+        print(f"   Non-fills (gaps > {LOO_SLIPPAGE_PCT*100:.0f}%) will expire - check status after open")
+    elif use_moo and submitted > 0:
         print(f"\n📅 {submitted} orders queued for next market open")
     
     return results
@@ -299,11 +392,16 @@ def main():
     parser.add_argument("--execute", action="store_true", help="Actually submit orders")
     parser.add_argument("--dry-run", action="store_true", help="Go through motions but don't submit")
     parser.add_argument("--moo", action="store_true", help="Use Market-on-Open orders (execute at next market open)")
+    parser.add_argument("--loo", action="store_true", help="Use Limit-on-Open orders with 1%% buffer (recommended)")
     
     args = parser.parse_args()
     
     if not args.preview and not args.execute:
         print("Error: Must specify --preview or --execute")
+        sys.exit(1)
+    
+    if args.moo and args.loo:
+        print("Error: Cannot use both --moo and --loo. Choose one.")
         sys.exit(1)
     
     # Connect to Alpaca
@@ -335,21 +433,29 @@ def main():
     print(f"Calculated {len(orders)} orders")
     
     if args.preview:
-        preview_orders(orders, account_info, use_moo=args.moo)
+        preview_orders(orders, account_info, use_moo=args.moo, use_loo=args.loo)
     elif args.execute:
         # Confirm before executing
-        order_type = "MOO (Market-on-Open)" if args.moo else "MARKET (immediate)"
+        if args.loo:
+            order_type = f"LOO (Limit-on-Open, {LOO_SLIPPAGE_PCT*100:.0f}% buffer)"
+        elif args.moo:
+            order_type = "MOO (Market-on-Open)"
+        else:
+            order_type = "MARKET (immediate)"
+        
         print(f"\n⚠️  About to submit {len(orders)} {order_type} orders to Alpaca")
         print(f"    Account: {ALPACA_BASE_URL}")
-        if args.moo:
+        if args.moo or args.loo:
             print(f"    Execution: Next market open (9:30 AM ET)")
+        if args.loo:
+            print(f"    Non-fills: Orders gapping > {LOO_SLIPPAGE_PCT*100:.0f}% will expire")
         confirm = input("    Type 'YES' to confirm: ")
         
         if confirm != "YES":
             print("Cancelled.")
             sys.exit(0)
         
-        results = execute_orders(api, orders, dry_run=args.dry_run, use_moo=args.moo)
+        results = execute_orders(api, orders, dry_run=args.dry_run, use_moo=args.moo, use_loo=args.loo)
         
         # Save results
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
