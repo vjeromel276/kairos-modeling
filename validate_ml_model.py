@@ -276,12 +276,134 @@ def validate_quintile_spread(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 # =============================================================================
 
 def validate_by_regime(df: pd.DataFrame, config: dict) -> pd.DataFrame:
-    """Placeholder for regime-based validation."""
+    """
+    Analyze IC performance across different market regimes.
+    
+    Regimes analyzed:
+    1. Up months vs Down months (based on median stock return)
+    2. High volatility vs Low volatility months
+    """
     logger.info("\n" + "=" * 60)
     logger.info("VALIDATION 3: IC BY MARKET REGIME")
     logger.info("=" * 60)
-    logger.info("  [Not yet implemented - placeholder for future extension]")
-    return pd.DataFrame()
+    
+    df = df.copy()
+    df['year_month'] = df['date'].dt.to_period('M')
+    
+    # Calculate monthly market stats
+    monthly_stats = df.groupby('year_month').agg({
+        'actual_return': ['mean', 'std'],
+        'alpha': 'count'
+    }).reset_index()
+    monthly_stats.columns = ['year_month', 'mkt_return', 'mkt_vol', 'n_obs']
+    
+    # Classify months
+    median_return = monthly_stats['mkt_return'].median()
+    median_vol = monthly_stats['mkt_vol'].median()
+    
+    monthly_stats['regime_direction'] = np.where(
+        monthly_stats['mkt_return'] >= median_return, 'UP', 'DOWN'
+    )
+    monthly_stats['regime_vol'] = np.where(
+        monthly_stats['mkt_vol'] >= median_vol, 'HIGH_VOL', 'LOW_VOL'
+    )
+    
+    # Calculate IC for each month
+    monthly_ic = []
+    for ym, group in df.groupby('year_month'):
+        ic = calculate_ic(group['actual_return'].values, group['alpha'].values)
+        monthly_ic.append({'year_month': ym, 'ic': ic})
+    
+    ic_df = pd.DataFrame(monthly_ic)
+    ic_df = ic_df.merge(monthly_stats, on='year_month')
+    
+    # === Analysis by Market Direction ===
+    logger.info("\n3a. IC BY MARKET DIRECTION")
+    logger.info("-" * 40)
+    
+    direction_analysis = ic_df.groupby('regime_direction').agg({
+        'ic': ['mean', 'std', 'count'],
+        'mkt_return': 'mean'
+    }).round(4)
+    direction_analysis.columns = ['mean_ic', 'std_ic', 'n_months', 'avg_mkt_ret']
+    
+    for regime, row in direction_analysis.iterrows():
+        pct_positive = (ic_df[ic_df['regime_direction'] == regime]['ic'] > 0).mean() * 100
+        logger.info(f"  {regime} months ({int(row['n_months'])} months):")
+        logger.info(f"    Mean IC: {row['mean_ic']:+.4f}")
+        logger.info(f"    IC Std:  {row['std_ic']:.4f}")
+        logger.info(f"    % Positive IC: {pct_positive:.0f}%")
+        logger.info(f"    Avg Market Return: {row['avg_mkt_ret']*100:+.2f}%")
+    
+    # === Analysis by Volatility Regime ===
+    logger.info("\n3b. IC BY VOLATILITY REGIME")
+    logger.info("-" * 40)
+    
+    vol_analysis = ic_df.groupby('regime_vol').agg({
+        'ic': ['mean', 'std', 'count'],
+        'mkt_vol': 'mean'
+    }).round(4)
+    vol_analysis.columns = ['mean_ic', 'std_ic', 'n_months', 'avg_vol']
+    
+    for regime, row in vol_analysis.iterrows():
+        pct_positive = (ic_df[ic_df['regime_vol'] == regime]['ic'] > 0).mean() * 100
+        logger.info(f"  {regime} months ({int(row['n_months'])} months):")
+        logger.info(f"    Mean IC: {row['mean_ic']:+.4f}")
+        logger.info(f"    IC Std:  {row['std_ic']:.4f}")
+        logger.info(f"    % Positive IC: {pct_positive:.0f}%")
+        logger.info(f"    Avg Cross-Sectional Vol: {row['avg_vol']*100:.2f}%")
+    
+    # === Combined Regime Analysis ===
+    logger.info("\n3c. IC BY COMBINED REGIME")
+    logger.info("-" * 40)
+    
+    ic_df['combined_regime'] = ic_df['regime_direction'] + '_' + ic_df['regime_vol']
+    
+    combined = ic_df.groupby('combined_regime').agg({
+        'ic': ['mean', 'count']
+    }).round(4)
+    combined.columns = ['mean_ic', 'n_months']
+    combined = combined.sort_values('mean_ic', ascending=False)
+    
+    logger.info(f"  {'Regime':<20} {'Mean IC':>10} {'Months':>8}")
+    logger.info("  " + "-" * 40)
+    for regime, row in combined.iterrows():
+        logger.info(f"  {regime:<20} {row['mean_ic']:>+10.4f} {int(row['n_months']):>8}")
+    
+    # === Key Insight ===
+    logger.info("\n3d. KEY INSIGHT")
+    logger.info("-" * 40)
+    
+    up_ic = direction_analysis.loc['UP', 'mean_ic']
+    down_ic = direction_analysis.loc['DOWN', 'mean_ic']
+    high_vol_ic = vol_analysis.loc['HIGH_VOL', 'mean_ic']
+    low_vol_ic = vol_analysis.loc['LOW_VOL', 'mean_ic']
+    
+    if down_ic > 0:
+        logger.info(f"  ✓ Signal works in DOWN markets (IC={down_ic:+.4f})")
+    else:
+        logger.warning(f"  ⚠ Signal struggles in DOWN markets (IC={down_ic:+.4f})")
+    
+    if high_vol_ic > 0:
+        logger.info(f"  ✓ Signal works in HIGH volatility (IC={high_vol_ic:+.4f})")
+    else:
+        logger.warning(f"  ⚠ Signal struggles in HIGH volatility (IC={high_vol_ic:+.4f})")
+    
+    # Check for regime dependency
+    ic_gap_direction = abs(up_ic - down_ic)
+    ic_gap_vol = abs(high_vol_ic - low_vol_ic)
+    
+    if ic_gap_direction > 0.03:
+        logger.warning(f"  ⚠ Large IC gap between UP/DOWN markets ({ic_gap_direction:.4f})")
+    else:
+        logger.info(f"  ✓ IC relatively stable across UP/DOWN markets (gap={ic_gap_direction:.4f})")
+    
+    if ic_gap_vol > 0.03:
+        logger.warning(f"  ⚠ Large IC gap between HIGH/LOW vol ({ic_gap_vol:.4f})")
+    else:
+        logger.info(f"  ✓ IC relatively stable across vol regimes (gap={ic_gap_vol:.4f})")
+    
+    return ic_df
 
 
 # =============================================================================

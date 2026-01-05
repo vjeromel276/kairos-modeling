@@ -45,7 +45,7 @@ def main():
                 {args.target_column} as fwd_ret,
                 adv_20,
                 NTILE(10) OVER (PARTITION BY date ORDER BY {args.alpha_column}) as decile
-            FROM feat_matrix
+            FROM feat_matrix_v2
             WHERE {args.alpha_column} IS NOT NULL 
               AND {args.target_column} IS NOT NULL
               AND adv_20 >= {args.adv_thresh}
@@ -98,7 +98,7 @@ def main():
                 {args.alpha_column} as alpha,
                 {args.target_column} as fwd_ret,
                 NTILE(10) OVER (PARTITION BY date ORDER BY {args.alpha_column}) as decile
-            FROM feat_matrix
+            FROM feat_matrix_v2
             WHERE {args.alpha_column} IS NOT NULL 
               AND {args.target_column} IS NOT NULL
               AND adv_20 >= {args.adv_thresh}
@@ -130,7 +130,7 @@ def main():
     ic_df = con.execute(f"""
         SELECT 
             CORR({args.alpha_column}, {args.target_column}) as overall_ic
-        FROM feat_matrix
+        FROM feat_matrix_v2
         WHERE {args.alpha_column} IS NOT NULL 
           AND {args.target_column} IS NOT NULL
           AND adv_20 >= {args.adv_thresh}
@@ -145,7 +145,7 @@ def main():
         SELECT 
             EXTRACT(YEAR FROM date) as year,
             CORR({args.alpha_column}, {args.target_column}) as ic
-        FROM feat_matrix
+        FROM feat_matrix_v2
         WHERE {args.alpha_column} IS NOT NULL 
           AND {args.target_column} IS NOT NULL
           AND adv_20 >= {args.adv_thresh}
@@ -170,7 +170,7 @@ def main():
                 {args.alpha_column} as alpha,
                 {args.target_column} as fwd_ret,
                 NTILE(10) OVER (PARTITION BY date ORDER BY {args.alpha_column}) as decile
-            FROM feat_matrix
+            FROM feat_matrix_v2
             WHERE {args.alpha_column} IS NOT NULL 
               AND {args.target_column} IS NOT NULL
               AND adv_20 >= {args.adv_thresh}
@@ -203,7 +203,7 @@ def main():
                 {args.alpha_column} as alpha,
                 {args.target_column} as fwd_ret,
                 NTILE(5) OVER (PARTITION BY date ORDER BY {args.alpha_column}) as quintile
-            FROM feat_matrix
+            FROM feat_matrix_v2
             WHERE {args.alpha_column} IS NOT NULL 
               AND {args.target_column} IS NOT NULL
               AND adv_20 >= {args.adv_thresh}
