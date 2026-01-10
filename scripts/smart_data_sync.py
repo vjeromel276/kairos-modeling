@@ -4,10 +4,12 @@ scripts/smart_data_sync.py
 ==================
 Intelligently sync Sharadar data tables with the API.
 
+FIXED: Now handles pagination (API returns max 10,000 rows per request)
+
 For each table:
 1. Check current max date in local DuckDB
 2. Query API to see if newer data exists
-3. Download only if new data is available
+3. Download only if new data is available (with pagination)
 4. Merge into DuckDB
 
 Tables supported:
@@ -42,6 +44,7 @@ from typing import Optional, Dict, List, Tuple
 import requests
 import pandas as pd
 import duckdb
+import io
 
 # Logging setup
 logging.basicConfig(
@@ -63,6 +66,7 @@ TABLES = {
         "db_date_field": "date",        # Field in local DB to check max
         "description": "Daily stock prices",
         "frequency": "daily",
+        "date_columns": ["date"],
     },
     "DAILY": {
         "db_table": "daily",
@@ -70,6 +74,7 @@ TABLES = {
         "db_date_field": "date",
         "description": "Daily fundamental ratios (PE, PB, PS, EV/EBITDA)",
         "frequency": "daily",
+        "date_columns": ["date", "lastupdated"],
     },
     "SF1": {
         "db_table": "sf1",
@@ -78,6 +83,7 @@ TABLES = {
         "description": "Quarterly/Annual fundamentals",
         "frequency": "quarterly",
         "use_gte": True,
+        "date_columns": ["datekey", "reportperiod", "lastupdated"],
     },
     "SF2": {
         "db_table": "sf2",
@@ -86,6 +92,7 @@ TABLES = {
         "description": "Insider transactions",
         "frequency": "daily",
         "use_gte": True,
+        "date_columns": ["filingdate", "transactiondate"],
     },
 }
 
@@ -143,7 +150,6 @@ def check_api_for_new_data(
     date_field = table_config["date_field"]
     
     # Build URL to check for latest data
-    # Query for data newer than local_max
     url = f"{BASE_URL}/{table_name}.json?"
     
     if local_max:
@@ -160,14 +166,12 @@ def check_api_for_new_data(
         resp.raise_for_status()
         data = resp.json()
         
-        # Check for data
         rows = data.get("datatable", {}).get("data", [])
         
         if not rows:
-            # No new data found - we're up to date
-            return False, local_max, 0  # Return local_max as api_max to show "up to date"
+            return False, local_max, 0
         
-        # Find max date from all returned rows
+        # Find max date from returned rows
         api_max = None
         for row in rows:
             if row[0]:
@@ -178,9 +182,8 @@ def check_api_for_new_data(
         if api_max is None:
             return False, local_max, 0
         
-        # New data exists
         if local_max is None:
-            return True, api_max, -1  # -1 means unknown count, need full download
+            return True, api_max, -1
         
         return True, api_max, -1
         
@@ -189,42 +192,7 @@ def check_api_for_new_data(
         return False, None, 0
 
 
-def count_new_records(
-    table_name: str,
-    table_config: Dict,
-    since_date: date,
-    api_key: str
-) -> int:
-    """Count how many records are available since a given date."""
-    date_field = table_config["date_field"]
-    use_gte = table_config.get("use_gte", False)
-    
-    url = f"{BASE_URL}/{table_name}.json?"
-    
-    if use_gte:
-        url += f"{date_field}.gte={since_date.strftime('%Y-%m-%d')}&"
-    else:
-        url += f"{date_field}.gt={since_date.strftime('%Y-%m-%d')}&"
-    
-    url += f"qopts.columns={date_field}&"  # Just get one column to minimize data
-    url += f"api_key={api_key}"
-    
-    try:
-        resp = requests.get(url, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        # Get total count from metadata
-        meta = data.get("meta", {})
-        total = meta.get("total_count", len(data.get("datatable", {}).get("data", [])))
-        return total
-        
-    except Exception as e:
-        logger.warning(f"  Error counting records for {table_name}: {e}")
-        return -1
-
-
-def download_new_data(
+def download_new_data_paginated(
     table_name: str,
     table_config: Dict,
     since_date: Optional[date],
@@ -232,75 +200,120 @@ def download_new_data(
     output_dir: str
 ) -> Optional[str]:
     """
-    Download new data from API to a parquet file.
-    Returns path to downloaded file, or None if failed.
+    Download new data from API with PAGINATION support.
+    Returns path to downloaded parquet file, or None if failed.
     """
     date_field = table_config["date_field"]
     use_gte = table_config.get("use_gte", False)
+    date_columns = table_config.get("date_columns", [])
     
-    # Build download URL
-    url = f"{BASE_URL}/{table_name}.csv?"
+    # Build base URL
+    base_url = f"{BASE_URL}/{table_name}.csv?"
     
     if since_date:
         if use_gte:
-            # Include the boundary date for gte
-            url += f"{date_field}.gte={since_date.strftime('%Y-%m-%d')}&"
+            base_url += f"{date_field}.gte={since_date.strftime('%Y-%m-%d')}&"
         else:
-            # Exclude the boundary date for gt
             next_date = since_date + timedelta(days=1)
-            url += f"{date_field}.gte={next_date.strftime('%Y-%m-%d')}&"
+            base_url += f"{date_field}.gte={next_date.strftime('%Y-%m-%d')}&"
     
-    url += f"api_key={api_key}"
+    base_url += f"api_key={api_key}"
     
-    # Output paths
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = os.path.join(output_dir, f"SHARADAR_{table_name}_sync_{timestamp}.csv")
-    parquet_path = os.path.join(output_dir, f"SHARADAR_{table_name}_sync_{timestamp}.parquet")
+    logger.info(f"  Downloading {table_name} data (with pagination)...")
     
-    logger.info(f"  Downloading {table_name} data...")
+    all_dfs = []
+    cursor_id = None
+    page = 1
+    total_rows = 0
     
     try:
-        # Download CSV
-        with requests.get(url, stream=True, timeout=600) as resp:
-            resp.raise_for_status()
-            total_bytes = 0
-            with open(csv_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=64 * 1024):
-                    if chunk:
-                        f.write(chunk)
-                        total_bytes += len(chunk)
+        while True:
+            # Build URL with cursor if we have one
+            if cursor_id:
+                url = f"{base_url}&qopts.cursor_id={cursor_id}"
+            else:
+                url = base_url
             
-            logger.info(f"  Downloaded {total_bytes / (1024*1024):.1f} MB")
+            # Download this page
+            resp = requests.get(url, timeout=120)
+            resp.raise_for_status()
+            
+            # Check content type - CSV or JSON error?
+            content_type = resp.headers.get('content-type', '')
+            
+            if 'application/json' in content_type:
+                # Might be an error or empty response
+                try:
+                    json_data = resp.json()
+                    if 'datatable' in json_data:
+                        # Empty result
+                        if not json_data['datatable'].get('data'):
+                            break
+                except:
+                    pass
+            
+            # Parse CSV
+            csv_content = resp.text
+            if not csv_content.strip() or csv_content.strip() == '':
+                break
+            
+            # Read CSV from string
+            df_page = pd.read_csv(io.StringIO(csv_content), parse_dates=date_columns, low_memory=False)
+            
+            if df_page.empty:
+                break
+            
+            rows_this_page = len(df_page)
+            total_rows += rows_this_page
+            all_dfs.append(df_page)
+            
+            logger.info(f"    Page {page}: {rows_this_page:,} rows (total: {total_rows:,})")
+            
+            # Check for next cursor in the Link header or response
+            # Nasdaq Data Link uses cursor_id in response headers or you need JSON endpoint
+            # For CSV, we need to check if we got a full page (10,000 rows)
+            if rows_this_page < 10000:
+                # Less than full page = no more data
+                break
+            
+            # For CSV endpoint, we need to use JSON to get cursor
+            # Switch to JSON to get cursor_id
+            json_url = url.replace('.csv?', '.json?')
+            json_resp = requests.get(json_url, timeout=60)
+            json_resp.raise_for_status()
+            json_data = json_resp.json()
+            
+            cursor_id = json_data.get('meta', {}).get('next_cursor_id')
+            
+            if not cursor_id:
+                break
+            
+            page += 1
+            
+            # Safety limit
+            if page > 50:
+                logger.warning(f"  Reached page limit (50), stopping")
+                break
         
-        # Convert to parquet
-        logger.info(f"  Converting to parquet...")
-        
-        # Determine date columns based on table
-        date_columns = {
-            "SEP": ["date"],
-            "DAILY": ["date", "lastupdated"],
-            "SF1": ["datekey", "reportperiod", "lastupdated"],
-            "SF2": ["filingdate", "transactiondate"],
-        }.get(table_name, [])
-        
-        df = pd.read_csv(csv_path, parse_dates=date_columns, low_memory=False)
-        
-        if df.empty:
-            logger.warning(f"  No data in downloaded file")
-            os.remove(csv_path)
+        if not all_dfs:
+            logger.warning(f"  No data downloaded")
             return None
         
-        logger.info(f"  Downloaded {len(df):,} rows")
+        # Combine all pages
+        df = pd.concat(all_dfs, ignore_index=True)
+        logger.info(f"  Total downloaded: {len(df):,} rows across {page} page(s)")
         
+        # Save to parquet
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        parquet_path = os.path.join(output_dir, f"SHARADAR_{table_name}_sync_{timestamp}.parquet")
         df.to_parquet(parquet_path, index=False)
-        os.remove(csv_path)
         
         return parquet_path
         
     except Exception as e:
         logger.error(f"  Download failed: {e}")
-        if os.path.exists(csv_path):
-            os.remove(csv_path)
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -412,8 +425,8 @@ def sync_table(
         result["status"] = "needs_update"
         return result
     
-    # Download new data
-    parquet_path = download_new_data(
+    # Download new data WITH PAGINATION
+    parquet_path = download_new_data_paginated(
         table_name, table_config, local_max, api_key, temp_dir
     )
     
@@ -450,7 +463,6 @@ def print_summary(results: List[Dict]):
             "check_failed": "?",
         }.get(r["status"], "?")
         
-        # Format local_max properly
         local_str = str(r['local_max']) if r['local_max'] else 'None'
         
         logger.info(f"{status_icon} {r['table']:8} ({r['db_table']:12}) | "
@@ -465,7 +477,7 @@ def print_summary(results: List[Dict]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Smart Sharadar data sync",
+        description="Smart Sharadar data sync (with pagination)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -517,7 +529,7 @@ Examples:
     
     # Connect to database
     logger.info(f"\n{'='*60}")
-    logger.info("SHARADAR DATA SYNC")
+    logger.info("SHARADAR DATA SYNC (with pagination)")
     logger.info(f"{'='*60}")
     logger.info(f"Database: {args.db}")
     logger.info(f"Tables: {', '.join(args.tables)}")
