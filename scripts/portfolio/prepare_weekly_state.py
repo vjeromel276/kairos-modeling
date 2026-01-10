@@ -111,6 +111,8 @@ def main():
     v33_date = max_date(con, "feat_composite_v33_regime")
     matrix_date = max_date(con, "feat_matrix_v2")
     targets_date = max_date(con, "feat_targets")
+    ml_v2_date = max_date(con, "feat_alpha_ml_xgb_v2")
+    ml_v2_tune_date = max_date(con, "feat_alpha_ml_xgb_v2_tuned")
 
     decision_date = min(d for d in [market_date, v7_date] if d is not None)
 
@@ -184,6 +186,16 @@ def main():
         ok("feat_matrix_v2", matrix_date)
     else:
         stale("feat_matrix_v2", matrix_date)
+        
+    # ML Predictions
+    if ml_v2_date == decision_date:
+        ok("ml_predictions_v2", ml_v2_date)
+    else:
+        stale("ml_predictions_v2", ml_v2_date)
+    if ml_v2_tune_date == decision_date:
+        ok("ml_predictions_v2_tuned", ml_v2_tune_date)
+    else:
+        stale("ml_predictions_v2_tuned", ml_v2_tune_date)
 
     print()
 
