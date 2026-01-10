@@ -10,9 +10,9 @@ Executes all pipeline phases in order:
   Phase 5: Feature Matrix Assembly
 
 Usage:
-    python run_pipeline.py --db /data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
-    python run_pipeline.py --phase 2 --db /data/kairos.duckdb  # Run only Phase 2
-    python run_pipeline.py --list  # Show all scripts in order
+    python scripts/run_pipeline.py --db data/kairos.duckdb --universe scripts/sep_dataset/feature_sets/option_b_universe.csv --date 2025-12-26
+    python scripts/run_pipeline.py --phase 2 --db data/kairos.duckdb  # Run only Phase 2
+    python scripts/run_pipeline.py --list  # Show all scripts in order
 """
 
 import argparse
