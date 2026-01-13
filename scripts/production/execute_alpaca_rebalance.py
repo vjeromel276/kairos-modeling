@@ -9,29 +9,38 @@ Modes:
   2. Rebalance (existing positions) - calculates delta from Alpaca positions
 
 Order Types:
-  - Default: Market-on-Open orders (submit Friday night, fills Monday 9:30 AM)
-  - --intraday: Market orders for immediate fill during market hours
+  - Paper trading: Defaults to intraday market orders (MOO simulation is unreliable)
+  - Live trading: Defaults to Market-on-Open orders (submit Friday night, fills Monday 9:30 AM)
+  - --intraday: Force immediate market orders
+  - --force-moo: Force MOO orders even on paper trading (for testing)
   - --max-gap X: Skip stocks that gapped more than X% from Friday close (disaster protection)
+
+Note on Paper Trading:
+  Alpaca's paper trading environment does not properly simulate MOO orders.
+  Approximately 27% of MOO orders expire without filling due to simulation bugs.
+  Therefore, this script automatically uses intraday market orders for paper trading.
+  See: https://forum.alpaca.markets/t/accurate-opg-and-cls-prices-for-paper-trading/3762
 
 Workflow:
   Friday after close:
     1. Run pipeline, generate picks.csv
-    2. Submit MOO orders: python execute_alpaca_rebalance.py --picks picks.csv --execute
-    3. Orders queue for Monday 9:30 AM open auction
+    2. Submit orders: python execute_alpaca_rebalance.py --picks picks.csv --execute
+    3. Paper trading: executes immediately as market orders
+       Live trading: queues MOO orders for Monday 9:30 AM open auction
 
 Usage:
     # Preview what would happen (no orders submitted)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --preview
-    
-    # Execute as Market-on-Open (DEFAULT - submit Friday night, fills Monday 9:30 AM)
+
+    # Execute (auto-detects paper vs live trading)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute
-    
+
     # Execute with disaster protection (skip stocks gapping >5%)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --max-gap 5
-    
-    # Execute immediately during market hours (catch-up orders)
-    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --intraday
-    
+
+    # Force MOO orders on paper trading (for testing MOO behavior)
+    python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --execute --force-moo
+
     # Execute with custom portfolio value (default uses account equity)
     python scripts/production/execute_alpaca_rebalance.py --picks outputs/rebalance/2025-01-03/picks.csv --portfolio-value 100000 --execute
 
@@ -55,6 +64,11 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets
 
 # Default max gap for disaster protection (None = no limit)
 DEFAULT_MAX_GAP_PCT = None
+
+
+def is_paper_trading() -> bool:
+    """Check if we're using paper trading based on the API URL."""
+    return "paper" in ALPACA_BASE_URL.lower()
 
 
 def get_api():
@@ -422,10 +436,19 @@ def main():
     parser.add_argument("--preview", action="store_true", help="Preview orders without executing")
     parser.add_argument("--execute", action="store_true", help="Actually submit orders")
     parser.add_argument("--dry-run", action="store_true", help="Go through motions but don't submit")
-    parser.add_argument("--intraday", action="store_true", help="Use immediate market orders (for catch-up during market hours)")
+    parser.add_argument("--intraday", action="store_true", help="Force immediate market orders")
+    parser.add_argument("--force-moo", action="store_true", help="Force MOO orders even on paper trading (for testing)")
     parser.add_argument("--max-gap", type=float, metavar="PCT", help="Skip orders if price gapped more than PCT%% from reference (disaster protection)")
-    
+
     args = parser.parse_args()
+
+    # Determine order mode: paper trading defaults to intraday due to MOO simulation bugs
+    use_intraday = args.intraday
+    if is_paper_trading() and not args.force_moo:
+        use_intraday = True
+        if not args.intraday:
+            print("Note: Paper trading detected - using intraday orders (MOO simulation unreliable)")
+            print("      Use --force-moo to override and test MOO behavior\n")
     
     if not args.preview and not args.execute:
         print("Error: Must specify --preview or --execute")
@@ -460,27 +483,29 @@ def main():
     print(f"Calculated {len(orders)} orders")
     
     if args.preview:
-        preview_orders(orders, account_info, intraday=args.intraday, max_gap_pct=args.max_gap)
+        preview_orders(orders, account_info, intraday=use_intraday, max_gap_pct=args.max_gap)
     elif args.execute:
         # Confirm before executing
-        if args.intraday:
+        if use_intraday:
             order_type = "MARKET (immediate)"
         else:
             order_type = "MOO (Market-on-Open)"
-        
+
         print(f"\n⚠️  About to submit {len(orders)} {order_type} orders to Alpaca")
         print(f"    Account: {ALPACA_BASE_URL}")
-        if not args.intraday:
+        if is_paper_trading():
+            print(f"    Environment: PAPER TRADING")
+        if not use_intraday:
             print(f"    Execution: Next market open (9:30 AM ET)")
         if args.max_gap:
             print(f"    Max gap protection: {args.max_gap}%")
         confirm = input("    Type 'YES' to confirm: ")
-        
+
         if confirm != "YES":
             print("Cancelled.")
             sys.exit(0)
-        
-        results = execute_orders(api, orders, dry_run=args.dry_run, intraday=args.intraday, max_gap_pct=args.max_gap)
+
+        results = execute_orders(api, orders, dry_run=args.dry_run, intraday=use_intraday, max_gap_pct=args.max_gap)
         
         # Save results in same directory as picks.csv
         picks_dir = os.path.dirname(args.picks)
