@@ -50,3 +50,7 @@ outputs/
 .env
 .gitignore
 *.json
+
+# IDEs and editors
+.vscode/
+.sfdx/
