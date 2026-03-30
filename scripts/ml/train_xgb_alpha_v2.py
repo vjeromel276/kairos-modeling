@@ -98,7 +98,7 @@ TARGET_CLF = 'label_5d_up'
 
 # Walk-forward CV
 CV_START_YEAR = 2015
-CV_TEST_YEARS = [2019, 2020, 2021, 2022, 2023, 2024]
+CV_TEST_YEARS = [2019, 2020, 2021, 2022, 2023, 2024, 2025]
 PURGE_DAYS = 5
 
 # XGBoost params (tuned for financial data)
