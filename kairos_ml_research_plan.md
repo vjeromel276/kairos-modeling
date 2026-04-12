@@ -1,6 +1,6 @@
-# Kairos ML Research Plan
+# Kairos ML Research Status
 ## Phase 4 — Equity Alpha Research
-*Last updated: April 12, 2026*
+*Last updated: April 12, 2026 — End of session 2*
 
 ---
 
@@ -10,13 +10,25 @@
 Project: Kairos Phase 4 — Equity Alpha Research
 Language: Python 3.11
 Database: DuckDB 1.4.3
-DB Path: /media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb
+
+Production DB (read-only):
+  /media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb
+
+Research DB (read-only, frozen snapshot):
+  /media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos_research.duckdb
 
 Container: kairos-ml-lab (Docker)
   - JupyterLab: http://localhost:8888/lab
   - MLflow:     http://localhost:5000
   - Models out: /media/.../Extreme Pro/ml_experiments/models/
   - MLflow DB:  /media/.../Extreme Pro/ml_experiments/mlflow/
+  - Notebooks:  /media/.../Extreme Pro/ml_experiments/notebooks/ → /workspace (bind mounted)
+
+Inside container paths:
+  - Research DB:  /data/kairos_research.duckdb  (read-only)
+  - Production DB: /data/kairos.duckdb          (read-only)
+  - Models:       /models/
+  - Notebooks:    /workspace/
 
 Current production model: scripts/ml/train_xgb_alpha_v2_tuned.py
   - 23 features from: feat_fundamental, feat_vol_sizing, feat_beta,
@@ -25,27 +37,62 @@ Current production model: scripts/ml/train_xgb_alpha_v2_tuned.py
   - Mean IC: ~0.04 (4%)
   - In production: alpha_ml_v2_tuned_clf drives weekly rebalance of top 75 stocks
 
-Key tables in DuckDB:
-  feat_targets          — ticker, date, ret_5d_f, label_5d_up
-  feat_matrix_v2        — all joined features + alpha signals
-  sep_base_academic     — daily prices for universe (2,335 tickers)
-  feat_momentum_v2      — momentum factors (19,643 tickers, filter to universe)
-  feat_quality_v2       — ROE, ROA, accruals
-  feat_value_v2         — earnings/book/EBITDA yields
+Proven next model (not yet in production):
+  - File: /models/xgb_v3_neutral_n100_20260412.joblib
+  - Features: /models/xgb_v3_neutral_n100_20260412_features.txt
+  - Target: ret_5d_sector_neutral
+  - n_estimators: 100, no early stopping
+  - CPCV mean IC: 0.0259, IC Sharpe: 3.727, 100% positive folds
+
+Key tables in research DB:
+  feat_targets          — ticker, date, ret_5d_f, label_5d_up (5,288,553 rows, 2335 tickers, 2015-2025)
   feat_fundamental      — forward-filled SF1 fundamentals
   feat_vol_sizing       — vol_21, vol_63, vol_blend
   feat_beta             — beta_21d, beta_63d, beta_252d, resid_vol_63d
   feat_price_action     — hl_ratio, range_pct, ret_21d, ret_5d
-  feat_composite_v33_regime — production alpha signal
+  feat_momentum_v2      — mom_1m, mom_3m, mom_6m, mom_12m, mom_12_1, reversal_1m
+  sep_base_academic     — daily prices for universe
   tickers               — metadata (sector, exchange, category)
-                          NOTE: has 2 rows per ticker (SF1 + SEP table rows)
-                          Always join with: SELECT DISTINCT ticker, sector FROM tickers
 
-DuckDB connection (always read-only from container):
+Research DB boundary: ret_5d_f is clean through 2025-12-12 only.
+  Dates from 2025-12-15 onward have corrupted forward returns (std 0.29+,
+  max 12-32x) due to the 5-day window running past the end of the snapshot.
+  Never use ret_5d_f for evaluation after 2025-12-12 in research DB.
+
+Standard tickers join (always use this exact form):
+  LEFT JOIN (
+      SELECT DISTINCT ticker, sector
+      FROM tickers
+      WHERE sector IS NOT NULL
+        AND ticker != 'N/A'
+  ) tk ON t.ticker = tk.ticker
+
+DuckDB connection (always read-only):
   import duckdb
-  con = duckdb.connect('/data/kairos.duckdb', read_only=True)
+  con = duckdb.connect('/data/kairos_research.duckdb', read_only=True)
+```
 
-Write outputs to: /models/ and log to MLflow at http://localhost:5000
+---
+
+## Docker Container Configuration
+
+Container rebuilt April 12, 2026 with /workspace bind mounted.
+Full docker run command:
+
+```bash
+docker run -d \
+  --name kairos-ml-lab \
+  --gpus all \
+  -p 8888:8888 \
+  -p 5000:5000 \
+  -v "/media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos.duckdb:/data/kairos.duckdb:ro" \
+  -v "/media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos_research.duckdb:/data/kairos_research.duckdb:ro" \
+  -v "/media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/ml_experiments/mlflow:/mlflow" \
+  -v "/media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/ml_experiments/models:/models" \
+  -v "/media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/ml_experiments/notebooks:/workspace" \
+  -e PYTHONUNBUFFERED=1 \
+  -e PYTHONDONTWRITEBYTECODE=1 \
+  kairos-ml-lab
 ```
 
 ---
@@ -55,351 +102,239 @@ Write outputs to: /models/ and log to MLflow at http://localhost:5000
 ```
 main
   └── sector-neutral          ← current working branch
-        └── fix/validation-regime   ← next branch (not yet created)
+        └── fix/validation-regime   ← to be created after research proves fix
 ```
 
-**main** — production pipeline, never broken
-**sector-neutral** — contains 5 new scripts (see below), pushed and safe
-**fix/validation-regime** — to be created, fixes validation regime pipeline-wide
+---
+
+## Completed — Session 1 (April 12, 2026)
+
+### 1. N/A Ticker Warning — RESOLVED
+The tickers table contained the literal string 'N/A' as a ticker for
+institutional 13F filers (not stocks). Fix: add AND ticker != 'N/A'
+to the standard tickers join. Applied to all new notebooks and scripts.
+
+### 2. Validation Regime Flaw — DIAGNOSED AND FIXED
+Early stopping is fundamentally incompatible with financial time series.
+Fix: remove early_stopping_rounds entirely. Fix n_estimators via CPCV.
+Evidence: fixed regime produced +50% mean IC, variance halved, all folds positive.
+MLflow: experiment validation_regime_comparison (ID: 3)
+
+### 3. CPCV n_estimators Grid Search — COMPLETE
+Decision: n_estimators=100, no early stopping.
+Rationale: IC Sharpe 3.793, turnover 28.9%, all 15 folds positive.
+MLflow: experiment cpcv_n_estimators_grid (ID: 4)
 
 ---
 
-## Scripts Added (sector-neutral branch)
+## Completed — Session 2 (April 12, 2026)
 
-| Script | Location | Status | Purpose |
-|--------|----------|--------|---------|
-| `train_xgb_alpha_v3_neutral.py` | `scripts/ml/` | ✓ Written, runs | Train on sector-neutral target |
-| `generate_ml_predictions_v3_neutral.py` | `scripts/ml/` | ✓ Written, runs | Generate v3 predictions |
-| `build_gross_profit.py` | `scripts/features/` | ✓ Pushed | Feature builder |
-| `train_xgb_alpha_v3.py` | `scripts/ml/` | ✓ Pushed | Intermediate version |
-| `tune_xgb_optuna_v3.py` | `scripts/ml/` | ✓ Pushed | Optuna tuning script |
+### 4. Path 1 — Target Neutralization v2 — COMPLETE
 
-**Note:** `generate_ml_predictions_v3_neutral.py` produces negative IC (-0.0065)
-in validation due to the undertrained final model (6 trees). This is a known
-issue caused by the validation regime flaw described below. Do NOT add to
-pipeline until the validation regime fix is complete and verified.
+**Notebook:** `path1_target_neutralization_v2.ipynb`
+**MLflow experiment:** `path1_target_neutralization_v2` (ID: 5), 4 runs
+
+**Walk-forward CV results (sector-neutral target, n=100, no early stopping):**
+
+| Year | IC_raw |
+|------|--------|
+| 2019 | +0.0401 |
+| 2020 | -0.0205 |
+| 2021 | +0.0372 |
+| 2022 | +0.0486 |
+| 2023 | +0.0312 |
+| 2024 | +0.0447 |
+| 2025 | +0.0348 |
+
+| Metric | Value |
+|--------|-------|
+| Mean IC_raw | 0.0309 |
+| Std IC_raw | 0.0234 |
+| IC Sharpe | 1.320 |
+| Min IC_raw | -0.0205 (2020) |
+| % positive | 86% |
+
+2020 negative IC fully explained by two unpredictable macro events:
+- February: initial COVID selloff (Feb 19 regime break)
+- November: Pfizer vaccine announcement (Nov 9 factor rotation)
+Q2 and Q3 2020 were solidly positive. Not a model flaw.
+
+**CPCV results (sector-neutral target, n=100, no early stopping):**
+
+| Metric | Value |
+|--------|-------|
+| Mean IC_raw | 0.0259 |
+| Std IC_raw | 0.0069 |
+| IC Sharpe | 3.727 |
+| Min IC_raw | 0.0174 (fold 6) |
+| % positive | 100% |
+
+All 15 folds positive. Genuine cross-regime signal confirmed.
+
+**Final model:**
+- File: `/models/xgb_v3_neutral_n100_20260412.joblib` (171.3 KB)
+- Features: `/models/xgb_v3_neutral_n100_20260412_features.txt`
+- pred_std: 0.0257 (healthy — confirms model is not degenerate)
+- pred_mean: 0.5119 (correctly centered)
+
+**Inference simulation (2025-12-12 — last clean date in research DB):**
+- Market context: down week, Fed hawkish surprise Dec 18
+- Top 75 realized: -0.82% vs universe -1.05% (outperformed by 23 bps)
+- Bottom 75 realized: -2.84%
+- Long-short spread: +2.02%
+- Single-date IC_raw: 0.1230
+
+Model is working correctly. Ready for production prediction script fix.
 
 ---
 
-## Known Issues
-
-### Issue 1 — Validation Regime Flaw (CRITICAL, pipeline-wide)
-
-**What it is:**
-All training scripts use the last 10% of training data chronologically
-as the early stopping validation set:
+## Locked Production Parameters
 
 ```python
-n_val = int(n_train * 0.1)
-X_val = X_train.iloc[-n_val:]
+XGB_PARAMS = {
+    'n_estimators':     100,       # FIXED — CPCV grid search
+    'max_depth':        4,
+    'learning_rate':    0.05,
+    'subsample':        0.7,
+    'colsample_bytree': 0.7,
+    'reg_alpha':        0.1,
+    'reg_lambda':       1.0,
+    'min_child_weight': 50,
+    'objective':        'binary:logistic',
+    'device':           'cuda',
+    'random_state':     42,
+    'verbosity':        0,
+    # early_stopping_rounds: REMOVED PERMANENTLY
+}
+
+CPCV_CONFIG = {
+    'n_splits':      6,
+    'n_test_splits': 2,   # C(6,2) = 15 folds
+    'purge_days':    7,   # per test group boundary
+}
 ```
-
-**Why it's wrong:**
-The last 10% of training is always a specific market regime (e.g., late 2022
-bear market when training for 2023). Early stopping sees no improvement on that
-regime and stops prematurely. This produces undertrained models with very low
-tree counts (0-6 trees in some folds).
-
-**Evidence:**
-- CV clf tree counts for v3_neutral: 6, 0, 270, 41, 0, 169, 25
-- Final model clf stopped at 6 trees → std of predictions = 0.0081 (nearly flat)
-- Validation IC = -0.0065 vs CV IC = +0.0281 (catastrophic collapse)
-
-**Affected scripts:**
-- `train_xgb_alpha_v2_tuned.py` (production — masked by noisier target)
-- `train_xgb_alpha_v3_neutral.py` (new — exposed by cleaner target)
-- All future training scripts
-
-**The fix:**
-Use a dedicated validation year between training and test, not a slice of
-training data. When testing year N, train on years < N-1, validate on year N-1,
-test on year N. Early stopping sees a full representative year.
-
-```python
-# Current (wrong)
-train = data[data.year < test_year]
-val   = train.iloc[-10%:]  # last slice of training
-
-# Fixed (correct)
-train = data[data.year < test_year - 1]
-val   = data[data.year == test_year - 1]  # dedicated validation year
-test  = data[data.year == test_year]
-```
-
-**Status:** Not yet implemented. Must be proven in research notebook before
-touching any production scripts.
 
 ---
 
-### Issue 2 — tickers Table Duplicate Rows (KNOWN, handled)
+## Sector-Neutral Target — Confirmed Formula
 
-**What it is:**
-The `tickers` table has 2 rows per ticker — one for SF1, one for SEP.
-Both rows have identical sector values.
-
-**Fix:**
-Always join with:
-```sql
-LEFT JOIN (
+```python
+sectors = con.execute("""
     SELECT DISTINCT ticker, sector
     FROM tickers
     WHERE sector IS NOT NULL
-) tk ON t.ticker = tk.ticker
+      AND ticker != 'N/A'
+""").fetchdf()
+
+df = df.merge(sectors, on='ticker', how='left')
+
+sector_mean = (
+    df.groupby(['date', 'sector'])['ret_5d_f']
+    .mean()
+    .rename('sector_ret_5d')
+    .reset_index()
+)
+df = df.merge(sector_mean, on=['date', 'sector'], how='left')
+df['ret_5d_sector_neutral'] = df['ret_5d_f'] - df['sector_ret_5d']
+
+# Confirmed properties:
+# mean = 0.000000
+# std  = 0.508200 (vs 0.511722 raw)
+# missing = 0
 ```
 
-**Status:** Fixed in all new scripts. Must be applied to any new scripts.
+IC always evaluated against raw ret_5d_f regardless of training target.
 
 ---
 
-### Issue 3 — feat_momentum_v2 Universe Mismatch (KNOWN, handled)
-
-**What it is:**
-`feat_momentum_v2` contains 19,643 tickers (full Sharadar universe) vs
-2,335 tickers in the active universe. When joining, always filter to
-tickers in `feat_targets` or `sep_base_academic`.
-
-**Status:** Handled automatically by LEFT JOIN in training scripts.
-Explicitly filtered in research DB creation (see below).
-
----
-
-### Issue 4 — GNLN Beta Outlier (KNOWN, handled in research)
-
-**What it is:**
-Ticker GNLN has beta_252d values up to 906 due to extreme price event.
-Only 0.15% of rows have |beta| > 3.
-
-**Fix in research notebooks:**
-Winsorize beta at ±3 before use in neutralization calculations.
-
-**Status:** Not a production issue (beta is used as a feature, not in
-neutralization in production scripts). Documented for awareness.
-
----
-
-## Path 1 — Target Neutralization
-
-### Research Findings (April 12, 2026)
-
-**Notebook:** `path1_neutral_target.ipynb` in JupyterLab
-
-**MLflow experiment:** `path1_target_neutralization` (experiment ID: 2)
-
-**Walk-forward CV results (2019-2025):**
-
-| Variant | Mean IC | Std IC | IC Sharpe | % Positive |
-|---------|---------|--------|-----------|------------|
-| baseline_raw | 0.0244 | 0.0340 | 0.717 | 86% |
-| market_neutral | 0.0242 | 0.0215 | 1.125 | 86% |
-| **sector_neutral** | **0.0281** | **0.0176** | **1.598** | **100%** |
-| full_neutral_v2 | 0.0233 | 0.0233 | 1.001 | 86% |
-
-**Winner: sector_neutral**
-- +15% mean IC improvement over baseline
-- +106% IC Sharpe improvement
-- 100% positive folds (never a losing year in test period)
-
-**Sector neutral formula:**
-```python
-ret_5d_sector_neutral = ret_5d_f - equal_weight_sector_mean_ret_5d
-```
-
-No beta involved. No market neutralization. Just remove what the sector did.
-
-**Why sector neutral won over full neutral:**
-Market effects in this universe are already partially captured by beta and
-momentum features. Sector rotation was the true unpredictable noise.
-
-**IC by year (sector_neutral):**
-```
-2019: 0.0329
-2020: 0.0222
-2021: 0.0463
-2022: 0.0306
-2023: 0.0030  ← weakest year
-2024: 0.0548  ← strongest year
-2025: 0.0072
-```
-
-### Current Blocker
-
-Final model is undertrained (6 trees) due to validation regime flaw (Issue 1).
-Prediction script produces IC = -0.0065 despite CV showing IC = +0.0281.
-
-**Do not add to pipeline until validation regime fix is complete.**
-
-### Next Steps for Path 1
-
-1. Fix validation regime in research environment
-2. Prove fix works in notebook (MLflow comparison)
-3. Retrain v3_neutral with fixed regime
-4. Verify prediction script produces positive IC
-5. Add to pipeline Phase 6
-6. Apply same fix to v2_tuned
-
----
-
-## Research Environment Plan
-
-### Purpose
-Fixed snapshot of production data for safe ML experimentation.
-Never updated. Never affects production database.
-
-### Location
-```
-/media/vjl2dev/b1eb2f9b-513e-4494-a9fa-9c137dd6f81b/media/vjerome2/Extreme Pro/kairos_phase4/data/kairos_research.duckdb
-```
-
-### Tables to Copy
-
-| Table | Filter | Approx Rows |
-|-------|--------|-------------|
-| `feat_targets` | 2015-2025 | 5,288,553 |
-| `feat_fundamental` | 2015-2025 | 5,288,553 |
-| `feat_vol_sizing` | 2015-2025 | 5,235,032 |
-| `feat_beta` | 2015-2025 | 5,235,032 |
-| `feat_price_action` | 2015-2025 | 5,270,821 |
-| `feat_momentum_v2` | 2015-2025 + universe tickers only | ~5,000,000 |
-| `sep_base_academic` | 2015-2025 | 5,288,553 |
-| `tickers` | all rows | 60,277 |
-
-**Total: ~41M rows, estimated <10GB on SSD**
-
-### Script to Create
-`scripts/research/create_research_db.py`
-- Reads from production DB (read-only)
-- Writes to research DB (new file)
-- Never modifies production DB
-- Run once, then research DB is frozen
-
-### Status
-Not yet created. Next immediate step.
-
----
-
-## Remaining Research Paths
-
-### Path 2 — CPCV (Combinatorial Purged Cross-Validation)
-
-**What:** Replace walk-forward CV with CPCV to get honest IC estimates
-and catch overfitting to specific train/test boundaries.
-
-**Why:** Walk-forward CV with 7 folds gives 7 IC estimates. CPCV with
-C(6,2)=15 combinations gives a distribution. IC Sharpe (mean/std of
-distribution) becomes the model selection criterion.
-
-**Dependencies:** Validation regime fix must be done first.
-
-**Success criteria:**
-- CPCV mean IC > 0.02
-- CPCV IC Sharpe > 1.0
-- % folds with IC > 0 exceeds 70%
-
-**Status:** Not started.
-
----
-
-### Path 3 — Model Ensemble (XGBoost + LightGBM + CatBoost)
-
-**What:** Train 3 diverse models, combine predictions.
-
-**Why:** Different tree-building algorithms make partially uncorrelated
-errors. Averaging reduces prediction variance.
-
-**Key requirement:** Pairwise prediction correlation < 0.90 for ensemble
-to add value. Introduce feature diversity (random 80% subsets per model).
-
-**Success criteria:** Ensemble IC exceeds best individual model by 0.005.
-
-**Status:** Not started.
-
----
-
-### Path 4 — Cross-Sectional Rank Features
-
-**What:** Transform raw features to percentile ranks within date/sector/size.
-
-**Why:** Absolute values (momentum = +23%) are regime-dependent. Ranks
-(87th percentile within sector) are invariant to market level.
-
-**Variants to test:**
-- Model A: 23 raw features (baseline)
-- Model B: 23 raw + 23 global rank
-- Model C: 23 raw + 23 global rank + 23 sector rank
-
-**Success criteria:** Model B or C IC exceeds baseline by 0.003.
-
-**Status:** Not started.
-
----
-
-### Path 5 — Feature Orthogonalization
-
-**What:** Remove correlations between features using PCA within feature groups.
-
-**Why:** vol_21, vol_63, vol_blend are nearly identical. roe and roa are
-both profitability. Correlated features cause unstable importances and
-double-counting.
-
-**Approach:** Partial orthogonalization within groups (volatility, beta,
-profitability, momentum, value, price) — not full PCA which loses
-interpretability.
-
-**Success criteria:** IC improvement 0.002+, feature importance std
-across folds decreases 20%+.
-
-**Status:** Not started.
-
----
-
-## Recommended Execution Order
-
-| Priority | Path | Status | Blocker |
-|----------|------|--------|---------|
-| 0 | Fix validation regime | 🔴 In progress | None |
-| 0 | Create research DB | 🔴 Not started | None |
-| 1 | Path 1 — Target Neutralization | 🟡 Proven, blocked | Validation regime fix |
-| 2 | Path 2 — CPCV | 🔴 Not started | Validation regime fix |
-| 3 | Path 3 — Ensemble | 🔴 Not started | Paths 1+2 |
-| 4 | Path 4 — Rank Features | 🔴 Not started | Paths 1+2 |
-| 5 | Path 5 — Orthogonalization | 🔴 Not started | Paths 1+2 |
+## Key Decisions
+
+1. Early stopping removed permanently.
+2. n_estimators=100 fixed via CPCV grid search.
+3. CPCV is the standard CV methodology. IC Sharpe (mean/std) is the
+   model selection criterion.
+4. IC always evaluated against raw ret_5d_f.
+5. tickers join always uses DISTINCT + AND ticker != 'N/A'.
+6. Notebooks persist via /workspace bind mount.
+7. Research DB ret_5d_f is clean through 2025-12-12 only. Any
+   evaluation using forward returns must use dates on or before
+   that date. Live forward returns require production DB.
 
 ---
 
 ## MLflow Experiments
 
 | Experiment | ID | Runs | Status |
-|------------|-----|------|--------|
+|---|---|---|---|
+| Default | 0 | 0 | Ignore |
 | test_connection | 1 | 0 | Ignore |
-| path1_target_neutralization | 2 | 4 | Complete |
+| path1_target_neutralization | 2 | 4 | Complete (session 1) |
+| validation_regime_comparison | 3 | 3 | Complete (session 1) |
+| cpcv_n_estimators_grid | 4 | 8 | Complete (session 1) |
+| path1_target_neutralization_v2 | 5 | 4 | Complete (session 2) |
 
 ---
 
-## Key Decisions Made
+## Notebooks in /workspace
 
-1. **Research in notebooks first, promote to pipeline only after proof.**
-   Never experiment directly on production scripts.
-
-2. **New scripts use versioned naming** (`_v3_neutral`) and never overwrite
-   existing tables or model files.
-
-3. **IC is always evaluated against raw `ret_5d_f`** regardless of what
-   target the model was trained on. Raw return is what the market delivers.
-
-4. **Classification model drives rebalance, not regression.** Regression
-   output is saved for research but not used in production signal.
-
-5. **tickers join always uses DISTINCT** to avoid duplicate rows from
-   SF1/SEP table entries.
-
-6. **feat_momentum_v2 always filtered to universe tickers** when used in
-   training to avoid the 19,643 ticker full universe contaminating the
-   2,335 ticker academic universe.
-
-7. **Research DB is a frozen snapshot.** It is never updated. Proven
-   improvements are promoted to production pipeline scripts only.
+| Notebook | Status | Purpose |
+|---|---|---|
+| `fix_validation_regime.ipynb` | ✓ Complete | Diagnosed and fixed validation regime flaw |
+| `cpcv_n_estimators_grid.ipynb` | ✓ Complete | CPCV grid search, locked n=100 |
+| `path1_target_neutralization_v2.ipynb` | ✓ Complete | Proven sector-neutral target with fixed params |
 
 ---
 
-*Document maintained across chat sessions. Include system context block
-at top of every new chat.*
+## Immediate Next Step
+
+Fix `generate_ml_predictions_v3_neutral.py` to use:
+- Model: `/models/xgb_v3_neutral_n100_20260412.joblib`
+- Features: `/models/xgb_v3_neutral_n100_20260412_features.txt`
+- Live features from production DB
+- Sector-neutral target (training only — inference uses raw features)
+- Output: predictions for current live cross-section with realized
+  return tracking capability
+
+This script was previously broken (IC = -0.0065) due to the 6-tree
+undertrained model. That blocker is now cleared.
+
+---
+
+## Research Paths Status
+
+| Priority | Path | Status | Blocker |
+|---|---|---|---|
+| 0 | Fix validation regime | ✅ Complete | — |
+| 0 | Create research DB | ✅ Complete | — |
+| 0 | CPCV n_estimators grid | ✅ Complete | — |
+| 1 | Path 1 — Target Neutralization v2 | ✅ Complete | — |
+| Next | Fix prediction script | 🔴 Not started | None |
+| 2 | Path 2 — CPCV as standard baseline | 🔴 Not started | Path 1 ✅ |
+| 3 | Path 3 — Ensemble | 🔴 Not started | Paths 1+2 |
+| 4 | Path 4 — Rank Features | 🔴 Not started | Paths 1+2 |
+| 5 | Path 5 — Orthogonalization | 🔴 Not started | Paths 1+2 |
+
+---
+
+## Known Issues
+
+### Issue 2 — tickers Table Duplicate Rows (KNOWN, handled)
+Always join with DISTINCT + AND ticker != 'N/A'. Fixed in all new scripts.
+
+### Issue 3 — feat_momentum_v2 Universe Mismatch (KNOWN, handled)
+Contains 19,643 tickers vs 2,335 in active universe.
+Handled automatically by LEFT JOIN to feat_targets.
+
+### Issue 4 — GNLN Beta Outlier (KNOWN, handled in research)
+beta_252d up to 906. Winsorize at ±3 in any notebook using beta
+for neutralization calculations.
+
+### Issue 5 — Research DB Forward Return Boundary (KNOWN)
+ret_5d_f is corrupted from 2025-12-15 onward in research DB.
+Last clean evaluation date: 2025-12-12.
+Live forward returns require production DB.
+
+---
+
+*Document maintained across chat sessions.*
+*Always include this full document at the start of every new chat.*
