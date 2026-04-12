@@ -95,9 +95,9 @@ def get_current_positions(api) -> Dict[str, Dict]:
     return {
         p.symbol: {
             "qty": int(p.qty),
-            "market_value": float(p.market_value),
-            "current_price": float(p.current_price),
-            "avg_entry_price": float(p.avg_entry_price),
+            "market_value": float(p.market_value or 0),
+            "current_price": float(p.current_price or 0),
+            "avg_entry_price": float(p.avg_entry_price or 0),
         }
         for p in positions
     }

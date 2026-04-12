@@ -1,7 +1,7 @@
 # Kairos Weekly Rebalance Quick Reference
 
-**Last Updated:** 2026-01-25  
-**Based on:** 2026-01-23 rebalance run (successfully executed)
+**Last Updated:** 2026-04-12  
+**Based on:** 2026-04-10 rebalance run (successfully executed)
 
 ---
 
@@ -266,19 +266,18 @@ Current settings in `scripts/production/generate_rebalance.py` (ML_CONFIG):
 
 ---
 
-## Example Run: 2026-01-23
+## Example Run: 2026-04-10
 
-**Run Date:** 2026-01-25 (Saturday, market closed)  
-**Rebalance Date:** 2026-01-23 (Friday - last trading day of week)  
-**Portfolio Value:** $101,490  
-**Prior Holdings:** 2026-01-16  
+**Run Date:** 2026-04-12 (Sunday, market closed)  
+**Rebalance Date:** 2026-04-10 (Friday - last trading day of week)  
+**Portfolio Value:** $94,086  
+**Prior Holdings:** 2026-04-02  
 
 **Results:**
-- Regime: `normal_vol_neutral`
+- Regime: `high_vol_neutral`
 - Positions: 75
-- Turnover: 14.9% (within 30% cap)
-- Orders Submitted: 113
-- Orders Failed: 1 (SMLR - not active)
+- Orders Submitted: 123
+- Orders Failed: 4 (SEE, SMLR, OS - not active; 436CVR021 - CVR instrument)
 
 **Commands used:**
 ```bash
@@ -288,18 +287,18 @@ source ~/miniconda3/etc/profile.d/conda.sh && conda activate kairos-gpu
 # Generate picks
 python scripts/production/generate_rebalance.py \
     --db data/kairos.duckdb \
-    --date 2026-01-23 \
-    --portfolio-value 101490 \
-    --prior-holdings outputs/rebalance/2026-01-16/picks.csv
+    --date 2026-04-10 \
+    --portfolio-value 94086 \
+    --prior-holdings outputs/rebalance/2026-04-02/picks.csv
 
 # Preview
 python scripts/production/execute_alpaca_rebalance.py \
-    --picks outputs/rebalance/2026-01-23/picks.csv \
+    --picks outputs/rebalance/2026-04-10/picks.csv \
     --preview
 
 # Execute
 python scripts/production/execute_alpaca_rebalance.py \
-    --picks outputs/rebalance/2026-01-23/picks.csv \
+    --picks outputs/rebalance/2026-04-10/picks.csv \
     --execute <<< "YES"
 ```
 
