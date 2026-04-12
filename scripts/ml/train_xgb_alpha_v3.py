@@ -118,18 +118,18 @@ TARGET_CLF = 'label_5d_up'
 
 # Walk-forward CV
 CV_START_YEAR = 2015
-CV_TEST_YEARS = [2019, 2020, 2021, 2022, 2023, 2024]
+CV_TEST_YEARS = [2019, 2020, 2021, 2022, 2023, 2024, 2025]
 PURGE_DAYS = 5
 
 # XGBoost params (same as v2 - no hyperparameter changes yet)
 XGB_PARAMS_REG = {
-    'learning_rate': 0.03,
-    'max_depth': 4,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'reg_lambda': 1.0,
-    'reg_alpha': 0.1,
-    'min_child_weight': 100,  # Require more samples per leaf
+    'learning_rate': 0.0996,       # was 0.03
+    'max_depth': 4,                # unchanged
+    'subsample': 0.545,            # was 0.7
+    'colsample_bytree': 0.857,     # was 0.7
+    'reg_lambda': 0.50,            # was 1.0
+    'reg_alpha': 0.644,            # was 0.1
+    'min_child_weight': 408,       # was 100
     'objective': 'reg:squarederror',
     'tree_method': 'hist',
     'random_state': 42,
@@ -137,13 +137,13 @@ XGB_PARAMS_REG = {
 }
 
 XGB_PARAMS_CLF = {
-    'learning_rate': 0.03,
+    'learning_rate': 0.0996,
     'max_depth': 4,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'reg_lambda': 1.0,
-    'reg_alpha': 0.1,
-    'min_child_weight': 100,
+    'subsample': 0.545,
+    'colsample_bytree': 0.857,
+    'reg_lambda': 0.50,
+    'reg_alpha': 0.644,
+    'min_child_weight': 408,
     'objective': 'binary:logistic',
     'eval_metric': 'auc',
     'tree_method': 'hist',
