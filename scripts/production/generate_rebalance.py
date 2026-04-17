@@ -75,6 +75,43 @@ ML_CONFIG = {
 # Select configuration
 CONFIG = ML_CONFIG.copy()
 
+# ============================================================================
+# REGIME-AWARE EXPOSURE RULES
+# Per Kairos Objective Policy (Phase 5): regime gates exposure level.
+# Simplest vol-gating first — high/normal vol = full exposure, low vol = reduced.
+# ============================================================================
+
+REGIME_EXPOSURE = {
+    # vol_regime -> (exposure_scale, target_vol_override)
+    # exposure_scale: 1.0 = full, 0.5 = half position sizes, 0.0 = cash
+    # target_vol_override: None = use CONFIG default, or explicit override
+    "high_vol":   (1.0, None),       # Sweet spot — full exposure
+    "normal_vol": (1.0, None),       # Normal — full exposure
+    "low_vol":    (0.70, None),      # Weak signal regime — reduce exposure
+    "unknown":    (1.0, None),       # Fallback — full exposure
+}
+
+def apply_regime_exposure(weights: 'pd.DataFrame', regime: dict) -> 'pd.DataFrame':
+    """
+    Scale portfolio weights based on current regime.
+
+    When exposure_scale < 1.0, position weights are uniformly reduced.
+    The freed capital is implicitly held as cash (weights sum < 1.0).
+    """
+    vol_regime = regime.get('vol_regime', 'unknown')
+    exposure_scale, vol_override = REGIME_EXPOSURE.get(vol_regime, (1.0, None))
+
+    if exposure_scale < 1.0:
+        logging.info(f"Regime exposure adjustment: {vol_regime} -> "
+                     f"scaling weights by {exposure_scale:.0%}")
+        weights = weights.copy()
+        weights['weight'] = weights['weight'] * exposure_scale
+
+    if vol_override is not None:
+        logging.info(f"Regime vol override: target_vol -> {vol_override:.0%}")
+
+    return weights
+
 # Known NYSE holidays for 2024-2026 (fallback if no market calendar)
 NYSE_HOLIDAYS = {
     # 2024
@@ -484,6 +521,12 @@ def generate_portfolio_summary(weights, regime, freshness, target_date, output_p
             "top_5_weight": round(top_5_weight, 4),
             "sector_weights": {k: round(v, 4) for k, v in sector_weights.items()}
         },
+        "regime_exposure": {
+            "vol_regime": regime.get("vol_regime", "unknown"),
+            "exposure_scale": REGIME_EXPOSURE.get(
+                regime.get("vol_regime", "unknown"), (1.0, None)
+            )[0],
+        },
         "parameters": {
             "alpha_column": CONFIG["alpha_column"],
             "target_vol": CONFIG["target_vol"],
@@ -630,7 +673,10 @@ def main():
     # Calculate weights
     logging.info("Calculating portfolio weights...")
     weights = calculate_weights(df, prior_weights)
-    
+
+    # Apply regime-aware exposure scaling
+    weights = apply_regime_exposure(weights, regime)
+
     # Generate trades
     logging.info("Generating trade list...")
     trades = generate_trades(weights, prior_weights, args.portfolio_value)
