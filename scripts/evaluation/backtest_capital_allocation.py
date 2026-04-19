@@ -236,8 +236,19 @@ def run_backtest(
     sector_cap_mult: float = 2.0,
     lambda_tc: float = 0.5,
     turnover_cap: float = 0.30,
+    spread_bps: float = 0.0,
+    impact_coef: float = 0.0,
+    portfolio_value: float = 100_000,
 ) -> pd.DataFrame:
-    """Run Risk4 backtest with dynamic capital allocation."""
+    """Run Risk4 backtest with dynamic capital allocation.
+
+    Transaction cost model (set spread_bps > 0 to enable):
+      - Per-period turnover measured in POSITION space (weight × allocation).
+        Accounts for both shape changes and CPPI allocation changes.
+      - Flat round-trip spread cost: `spread_bps × turnover` per period.
+      - Optional linear market impact: `impact_coef × trade_value / adv_20`
+        summed per traded ticker (requires portfolio_value assumption).
+    """
 
     df = df.dropna(subset=["sector"])
     df = df[df["adv_20"] >= adv_thresh]
@@ -261,6 +272,8 @@ def run_backtest(
 
     records = []
     w_old = pd.Series(dtype=float)
+    prev_allocation = 0.0  # starts flat — first period has full build-up turnover
+    position_prev = pd.Series(dtype=float)
     equity = 1.0
     peak = 1.0
     equity_history = [1.0]
@@ -292,15 +305,26 @@ def run_backtest(
             allocation = 1.0
 
         if allocation <= 0.001:
-            # Cash
+            # Cash — sell everything
+            turnover = float(position_prev.abs().sum())
+            cost = turnover * (spread_bps / 10000.0)
+            net_ret = -cost
+            equity *= (1 + net_ret)
+            peak = max(peak, equity)
             equity_history.append(equity)
             records.append({
                 "date": d,
                 "port_ret_raw": 0.0,
+                "port_ret_net": net_ret,
                 "bench_ret_raw": bench_ret,
                 "allocation": 0.0,
                 "vol_regime": vol_regime,
+                "turnover": turnover,
+                "cost": cost,
             })
+            w_old = pd.Series(dtype=float)
+            prev_allocation = 0.0
+            position_prev = pd.Series(dtype=float)
             continue
 
         # Standard Risk4 portfolio construction
@@ -370,29 +394,64 @@ def run_backtest(
         raw_port_ret = float((picks.loc[common, "target"] * w_new.loc[common]).sum())
         scaled_ret = raw_port_ret * allocation
 
-        # Update equity tracking
-        equity *= (1 + scaled_ret)
+        # --- Transaction costs ---
+        # position_new = w_new × allocation (actual deployed weights).
+        # turnover = L1 distance between positions (captures both shape
+        # changes and allocation changes). First period: builds from 0.
+        position_new = (w_new * allocation).fillna(0.0)
+        all_tick = pd.Index(position_prev.index).union(position_new.index).unique()
+        pn = position_new.reindex(all_tick).fillna(0.0)
+        pp = position_prev.reindex(all_tick).fillna(0.0)
+        delta = (pn - pp).abs()
+        turnover = float(delta.sum())
+
+        spread_cost = turnover * (spread_bps / 10000.0)
+        impact_cost = 0.0
+        if impact_coef > 0.0:
+            # trade_value_per_ticker = delta × portfolio_value
+            # impact_bps_per_trade = impact_coef × trade_value / adv
+            # cost_fraction = impact_bps / 10000 × delta (so impact_coef × delta^2 × pv / adv / 10000)
+            adv_series = picks.reindex(all_tick)["adv_20"].fillna(np.inf)
+            trade_value = delta * portfolio_value
+            impact_bps_each = impact_coef * (trade_value / adv_series).clip(lower=0, upper=1)
+            # Cost contribution per ticker = delta × impact_bps / 10000
+            impact_cost = float((delta * impact_bps_each / 10000.0).sum())
+
+        total_cost = spread_cost + impact_cost
+        net_ret = scaled_ret - total_cost
+
+        # Update equity tracking (net)
+        equity *= (1 + net_ret)
         peak = max(peak, equity)
         equity_history.append(equity)
 
         records.append({
             "date": d,
             "port_ret_raw": scaled_ret,
+            "port_ret_net": net_ret,
             "bench_ret_raw": bench_ret,
             "allocation": allocation,
             "vol_regime": vol_regime,
+            "turnover": turnover,
+            "cost": total_cost,
         })
+
+        prev_allocation = allocation
+        position_prev = position_new
 
     bt = pd.DataFrame.from_records(records).sort_values("date").reset_index(drop=True)
     if bt.empty:
         return bt
 
-    # Vol targeting on the raw (pre-allocation) returns
+    # Vol targeting on the raw (pre-cost, pre-allocation-scaling) returns
     raw = bt["port_ret_raw"]
     _, raw_vol, _ = annualize(raw, rebalance_every)
     scale = target_vol / raw_vol if raw_vol > 0 else 1.0
 
-    bt["port_ret"] = bt["port_ret_raw"] * scale
+    # Scaling leverages positions, so cost scales linearly with leverage too.
+    bt["port_ret_gross"] = bt["port_ret_raw"] * scale
+    bt["cost_scaled"] = bt["cost"] * scale
+    bt["port_ret"] = bt["port_ret_net"] * scale        # net column kept as primary
     bt["bench_ret"] = bt["bench_ret_raw"]
     bt["active_ret"] = bt["port_ret"] - bt["bench_ret"]
 
@@ -414,6 +473,12 @@ def main():
     parser.add_argument("--end-date", default="2025-11-01")
     parser.add_argument("--target-vol", type=float, default=0.25)
     parser.add_argument("--output-dir", type=str, default=None)
+    parser.add_argument("--spread-bps", type=float, default=0.0,
+                        help="Round-trip spread cost in bps (e.g., 15). Default 0 = gross.")
+    parser.add_argument("--impact-coef", type=float, default=0.0,
+                        help="Linear market impact coefficient (0 disables).")
+    parser.add_argument("--portfolio-value", type=float, default=100_000,
+                        help="Portfolio size in $ (for impact model only)")
     args = parser.parse_args()
 
     logger.info("=" * 70)
@@ -463,6 +528,9 @@ def main():
             strategy_name=name,
             strategy_config=config,
             target_vol=args.target_vol,
+            spread_bps=args.spread_bps,
+            impact_coef=args.impact_coef,
+            portfolio_value=args.portfolio_value,
         )
 
         if bt.empty:
@@ -476,6 +544,16 @@ def main():
         avg_alloc = bt["allocation"].mean()
         min_alloc = bt["allocation"].min()
 
+        # Gross metrics for comparison when costs are applied
+        gross_col = "port_ret_gross" if "port_ret_gross" in bt.columns else "port_ret"
+        ann_ret_g, _, sharpe_g = annualize(bt[gross_col], 5)
+        eq_g = (1 + bt[gross_col]).cumprod()
+        cal_g = calmar(ann_ret_g, max_drawdown(eq_g))
+        annual_turnover = bt["turnover"].sum() / max(1, len(bt)) * (252 / 5) \
+            if "turnover" in bt.columns else 0.0
+        annual_cost = bt["cost_scaled"].sum() / max(1, len(bt)) * (252 / 5) \
+            if "cost_scaled" in bt.columns else 0.0
+
         results.append({
             "strategy": name,
             "description": config["description"],
@@ -487,10 +565,16 @@ def main():
             "total_return": total_ret,
             "avg_allocation": avg_alloc,
             "min_allocation": min_alloc,
+            "sharpe_gross": sharpe_g,
+            "ann_return_gross": ann_ret_g,
+            "calmar_gross": cal_g,
+            "annual_turnover": annual_turnover,
+            "annual_cost": annual_cost,
         })
 
         logger.info(f"    Sharpe={sharpe:.3f}  Return={ann_ret:.1%}  "
-                    f"MaxDD={mdd:.1%}  Calmar={cal:.2f}  AvgAlloc={avg_alloc:.0%}")
+                    f"MaxDD={mdd:.1%}  Calmar={cal:.2f}  AvgAlloc={avg_alloc:.0%}  "
+                    f"AnnTurnover={annual_turnover:.1f}  AnnCost={annual_cost:.2%}")
 
     results_df = pd.DataFrame(results)
 
