@@ -75,6 +75,65 @@ ML_CONFIG = {
 # Select configuration
 CONFIG = ML_CONFIG.copy()
 
+# ============================================================================
+# REGIME-AWARE CASH SLEEVE
+# ============================================================================
+# Maps each regime_history_academic label to an equity-exposure multiplier.
+# 1.00 = fully invested, 0.50 = 50% cash. Opt in via --regime-sleeve.
+# Defaults are moderate: trim in bear + high_vol, hold at full in low_vol_bull.
+# Regime distribution (1998-2026, ~7100 days) shown for context.
+
+REGIME_EXPOSURE = {
+    # label                  exposure   share_of_days
+    "low_vol_bull":          1.00,   # 14.2%
+    "normal_vol_bull":       1.00,   # 11.7%
+    "high_vol_bull":         0.90,   #  7.9%
+    "low_vol_neutral":       1.00,   # 15.2%
+    "normal_vol_neutral":    0.90,   # 11.2%
+    "high_vol_neutral":      0.70,   #  7.1%
+    "low_vol_bear":          0.75,   #  3.5%  (rare)
+    "normal_vol_bear":       0.65,   # 10.3%
+    "high_vol_bear":         0.40,   # 18.9%  (most defensive)
+}
+REGIME_EXPOSURE_DEFAULT = 0.80  # fallback for unknown regime label
+
+
+def apply_regime_sleeve(portfolio_value: float, regime, enabled: bool) -> tuple[float, dict]:
+    """Scale equity portfolio_value by regime-based exposure factor.
+
+    When enabled, returns (effective_equity, info_dict). Cash = full
+    portfolio_value − effective_equity. When disabled, returns
+    (portfolio_value, {"enabled": False}).
+    """
+    if not enabled:
+        return portfolio_value, {"enabled": False}
+
+    regime_label = regime.get("regime") if isinstance(regime, dict) else None
+    if regime_label is None or regime_label not in REGIME_EXPOSURE:
+        exposure = REGIME_EXPOSURE_DEFAULT
+        logging.warning(
+            "Regime sleeve: regime '%s' not in exposure map, using default %.2f",
+            regime_label, exposure,
+        )
+    else:
+        exposure = REGIME_EXPOSURE[regime_label]
+
+    effective = portfolio_value * exposure
+    cash_reserve = portfolio_value - effective
+    info = {
+        "enabled": True,
+        "regime": regime_label,
+        "exposure": exposure,
+        "portfolio_value": round(portfolio_value, 2),
+        "effective_equity": round(effective, 2),
+        "cash_reserve": round(cash_reserve, 2),
+    }
+    logging.info(
+        "Regime sleeve ON: regime=%s exposure=%.0f%% equity=$%.0f cash=$%.0f",
+        regime_label, exposure * 100, effective, cash_reserve,
+    )
+    return effective, info
+
 # Known NYSE holidays for 2024-2026 (fallback if no market calendar)
 NYSE_HOLIDAYS = {
     # 2024
@@ -459,24 +518,26 @@ def generate_trades_csv(trades, target_weights, output_path):
     output.to_csv(output_path, index=False)
     logging.info(f"Wrote {len(output)} trades to {output_path}")
 
-def generate_portfolio_summary(weights, regime, freshness, target_date, output_path):
+def generate_portfolio_summary(weights, regime, freshness, target_date, output_path,
+                                sleeve_info=None):
     """Generate portfolio_summary.json."""
     # Calculate metrics
     n_positions = len(weights)
     top_5_weight = weights.nlargest(5, 'weight')['weight'].sum()
-    
+
     sector_weights = weights.groupby('sector')['weight'].sum().to_dict()
-    
+
     # Get next rebalance
     next_rebalances = get_next_rebalance_dates(target_date, n_future=1)
     next_rebalance = str(next_rebalances[0].date()) if next_rebalances else "unknown"
-    
+
     summary = {
         "generated_at": datetime.now().isoformat(),
         "rebalance_date": str(target_date),
         "is_rebalance_day": is_rebalance_day(target_date),
         "next_rebalance": next_rebalance,
         "regime": regime,
+        "regime_sleeve": sleeve_info or {"enabled": False},
         "portfolio": {
             "n_positions": n_positions,
             "top_n_target": CONFIG["top_n"],
@@ -561,6 +622,8 @@ def main():
                         help='Auto-fetch portfolio value (equity) from Alpaca, overrides --portfolio-value')
     parser.add_argument('--check-only', action='store_true', help='Only check if rebalance day')
     parser.add_argument('--force', action='store_true', help='Generate even if not rebalance day')
+    parser.add_argument('--regime-sleeve', action='store_true',
+                        help='Scale equity exposure by market regime (see REGIME_EXPOSURE map)')
 
     args = parser.parse_args()
 
@@ -642,16 +705,22 @@ def main():
     # Calculate weights
     logging.info("Calculating portfolio weights...")
     weights = calculate_weights(df, prior_weights)
-    
-    # Generate trades
+
+    # Apply regime-aware cash sleeve (opt-in via --regime-sleeve)
+    effective_portfolio_value, sleeve_info = apply_regime_sleeve(
+        args.portfolio_value, regime, args.regime_sleeve,
+    )
+
+    # Generate trades against the EFFECTIVE equity sleeve, not gross portfolio value
     logging.info("Generating trade list...")
-    trades = generate_trades(weights, prior_weights, args.portfolio_value)
-    
+    trades = generate_trades(weights, prior_weights, effective_portfolio_value)
+
     # Generate outputs
     logging.info("Generating output files...")
-    generate_picks_csv(weights, output_dir / "picks.csv", args.portfolio_value)
+    generate_picks_csv(weights, output_dir / "picks.csv", effective_portfolio_value)
     generate_trades_csv(trades, weights, output_dir / "trades.csv")
-    generate_portfolio_summary(weights, regime, freshness, target_date, output_dir / "portfolio_summary.json")
+    generate_portfolio_summary(weights, regime, freshness, target_date, output_dir / "portfolio_summary.json",
+                               sleeve_info=sleeve_info)
     generate_schedule_json(target_date, output_dir / "schedule.json")
     
     # Print summary
