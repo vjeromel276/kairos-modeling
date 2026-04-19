@@ -188,6 +188,11 @@ STRATEGIES = {
         'params': {'floor_pct': 0.85, 'multiplier': 5.0},
         'description': 'CPPI: 15% max loss from peak, 5x multiplier (aggressive)',
     },
+    'cppi_85_667_PROD': {
+        'fn': 'cppi',
+        'params': {'floor_pct': 0.85, 'multiplier': 6.67},
+        'description': 'CPPI: 85% floor, 6.67x (PRODUCTION config — full expo at peak)',
+    },
     'cppi_80_3': {
         'fn': 'cppi',
         'params': {'floor_pct': 0.80, 'multiplier': 3.0},
