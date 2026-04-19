@@ -408,14 +408,17 @@ def run_backtest(
         spread_cost = turnover * (spread_bps / 10000.0)
         impact_cost = 0.0
         if impact_coef > 0.0:
-            # trade_value_per_ticker = delta × portfolio_value
-            # impact_bps_per_trade = impact_coef × trade_value / adv
-            # cost_fraction = impact_bps / 10000 × delta (so impact_coef × delta^2 × pv / adv / 10000)
+            # Participation rate per ticker (trade_value / adv), bounded to [0, 1]:
+            #   participation = delta * portfolio_value / adv_20
+            # Impact as fraction of trade value = impact_coef * participation
+            # Cost as fraction of portfolio = delta * impact_coef * participation
+            #                               = impact_coef * delta^2 * pv / adv
+            # (Scales with pv — larger books pay more in impact.)
             adv_series = picks.reindex(all_tick)["adv_20"].fillna(np.inf)
-            trade_value = delta * portfolio_value
-            impact_bps_each = impact_coef * (trade_value / adv_series).clip(lower=0, upper=1)
-            # Cost contribution per ticker = delta × impact_bps / 10000
-            impact_cost = float((delta * impact_bps_each / 10000.0).sum())
+            participation = ((delta * portfolio_value) / adv_series).clip(
+                lower=0, upper=1
+            )
+            impact_cost = float((impact_coef * delta * participation).sum())
 
         total_cost = spread_cost + impact_cost
         net_ret = scaled_ret - total_cost

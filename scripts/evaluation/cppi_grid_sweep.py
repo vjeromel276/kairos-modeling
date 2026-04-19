@@ -101,6 +101,10 @@ def main() -> int:
     p.add_argument("--target-vol", type=float, default=0.25)
     p.add_argument("--mode", choices=("peak_lock", "free"), default="peak_lock")
     p.add_argument("--output-dir", default="outputs/evaluation/cppi_grid")
+    p.add_argument("--spread-bps", type=float, default=0.0,
+                   help="Round-trip spread cost in bps (0 = gross)")
+    p.add_argument("--impact-coef", type=float, default=0.0)
+    p.add_argument("--portfolio-value", type=float, default=100_000)
     args = p.parse_args()
 
     out = Path(args.output_dir)
@@ -135,7 +139,10 @@ def main() -> int:
     for name, cfg in strategies.items():
         bt = run_backtest(df.copy(), regime_df,
                           strategy_name=name, strategy_config=cfg,
-                          target_vol=args.target_vol)
+                          target_vol=args.target_vol,
+                          spread_bps=args.spread_bps,
+                          impact_coef=args.impact_coef,
+                          portfolio_value=args.portfolio_value)
         if bt.empty:
             continue
         ann_ret, ann_vol, sharpe = annualize(bt["port_ret"], 5)
