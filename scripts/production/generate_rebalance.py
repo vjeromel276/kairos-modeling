@@ -557,10 +557,22 @@ def main():
     parser.add_argument('--output-dir', default='outputs/rebalance', help='Output directory')
     parser.add_argument('--prior-holdings', help='Path to prior picks.csv for turnover smoothing')
     parser.add_argument('--portfolio-value', type=float, default=100_000, help='Portfolio value in $')
+    parser.add_argument('--from-alpaca', action='store_true',
+                        help='Auto-fetch portfolio value (equity) from Alpaca, overrides --portfolio-value')
     parser.add_argument('--check-only', action='store_true', help='Only check if rebalance day')
     parser.add_argument('--force', action='store_true', help='Generate even if not rebalance day')
-    
+
     args = parser.parse_args()
+
+    if args.from_alpaca:
+        import alpaca_trade_api as tradeapi
+        alpaca_key = os.getenv("ALPACA_API_KEY", "PK347Y7OMCULH3KC5MALII6ZWP")
+        alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "7vceesTCANBZXXjMjEuGs1a8N1YjkAudj4aKUUXofRHB")
+        alpaca_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        api = tradeapi.REST(alpaca_key, alpaca_secret, alpaca_url)
+        equity = float(api.get_account().equity)
+        logging.info(f"Pulled portfolio value from Alpaca: ${equity:,.2f}")
+        args.portfolio_value = equity
     
     # Setup logging
     logging.basicConfig(
