@@ -37,7 +37,7 @@ checkpoints/
 # ML artifacts and tracking
 mlruns/
 mlartifacts/
-models/temporimutator/
+models/temporimutator*/
 
 # System
 .DS_Store

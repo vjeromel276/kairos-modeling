@@ -21,6 +21,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from typing import Sequence
+
 from .features import STREAM_COLS, compute_all_streams
 
 WINDOW = 252
@@ -55,17 +57,29 @@ def build_raw_windows(
     step: int = STEP,
     horizons: Iterable[int] = HORIZONS,
     max_nan_frac: float = MAX_NAN_FRAC,
+    stream_cols: Sequence[str] = STREAM_COLS,
+    compute_technical: bool = True,
 ) -> list[RawWindow]:
     """
-    Given a per-ticker dataframe with columns [date, high, low, closeadj, volume],
-    return a list of RawWindow records. Drops windows with >max_nan_frac NaN in
-    any stream. Sequences are raw (not yet z-scored).
+    Given a per-ticker dataframe with columns [date, high, low, closeadj, volume]
+    (plus any extra feature columns already merged in), return a list of
+    RawWindow records. Drops windows with >max_nan_frac NaN in any stream.
+    Sequences are raw (not yet z-scored).
+
+    `stream_cols` selects which columns of the resulting dataframe become the
+    sequence streams. `compute_technical=True` appends the 4 technical streams
+    (rsi/vol_ratio/trend_ext/atr_ratio) and vol_scalar; disable when you don't
+    need them and they're not in `stream_cols`.
     """
     df = df_ticker.sort_values("date").reset_index(drop=True)
     if len(df) < window + max(horizons):
         return []
 
-    feat = compute_all_streams(df)
+    feat = compute_all_streams(df) if compute_technical else df.copy()
+    # vol_scalar is required regardless of stream choice (force label needs it)
+    if "vol_scalar" not in feat.columns:
+        from .features import vol_scalar as _vs
+        feat["vol_scalar"] = _vs(feat["closeadj"])
     ticker = feat["ticker"].iloc[0] if "ticker" in feat.columns else df_ticker.iloc[0]["ticker"]
     max_h = max(horizons)
 
@@ -78,7 +92,7 @@ def build_raw_windows(
             break
 
         sub = feat.iloc[start:end]
-        seq = sub[list(STREAM_COLS)].to_numpy(dtype=np.float32)
+        seq = sub[list(stream_cols)].to_numpy(dtype=np.float32)
         # NaN fraction per stream
         nan_frac = np.isnan(seq).mean(axis=0)
         if (nan_frac > max_nan_frac).any():

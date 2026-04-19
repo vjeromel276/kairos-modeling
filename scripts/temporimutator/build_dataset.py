@@ -39,7 +39,11 @@ _PROJECT_ROOT = _THIS.parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.temporimutator.features import STREAM_COLS  # noqa: E402
+from scripts.temporimutator.features import (  # noqa: E402
+    STREAM_COLS,
+    STREAM_PRESETS,
+    V2_TUNED_SOURCES,
+)
 from scripts.temporimutator.splits import (  # noqa: E402
     TEST_END,
     TEST_START,
@@ -83,6 +87,46 @@ def load_sep(conn: duckdb.DuckDBPyConnection, universe: list[str] | None) -> pd.
     return df
 
 
+def join_v2_tuned_features(
+    conn: duckdb.DuckDBPyConnection, df: pd.DataFrame
+) -> pd.DataFrame:
+    """Left-join the 5 v2_tuned feat_* tables onto (ticker, date)."""
+    out = df
+    for table, cols in V2_TUNED_SOURCES.items():
+        col_list = ", ".join(cols)
+        log.info("  joining %s (%d cols)", table, len(cols))
+        feat = conn.execute(
+            f"SELECT ticker, date, {col_list} FROM {table}"
+        ).fetchdf()
+        feat["date"] = pd.to_datetime(feat["date"])
+        out = out.merge(feat, on=["ticker", "date"], how="left")
+    # Forward-fill per ticker so a sparsely-updating fundamental doesn't create
+    # 90%+ NaN gaps inside a window (fundamentals update quarterly).
+    log.info("  forward-filling fundamental columns per ticker")
+    cols_to_ffill = [c for cols in V2_TUNED_SOURCES.values() for c in cols]
+    out[cols_to_ffill] = out.groupby("ticker")[cols_to_ffill].ffill()
+    return out
+
+
+def cross_sectional_zscore(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """
+    Per-date z-score across tickers. Replaces each feature value with its
+    cross-sectional standardized score on that date, preserving peer-rank
+    information that per-window temporal z-scoring would destroy.
+
+    Robust to NaN (filled with 0 after division) and to dates with near-zero
+    cross-sectional std (std floored at 1e-8).
+    """
+    log.info("  cross-sectional z-scoring %d columns per date", len(cols))
+    grouped = df.groupby("date", sort=False)
+    for col in cols:
+        mean = grouped[col].transform("mean")
+        std = grouped[col].transform("std").replace(0, np.nan)
+        z = (df[col] - mean) / std
+        df[col] = z.fillna(0.0).astype(np.float32)
+    return df
+
+
 def write_parquet_via_duckdb(df: pd.DataFrame, out_path: Path) -> None:
     """
     Writes a DataFrame to Parquet via DuckDB to avoid the pyarrow/duckdb
@@ -121,8 +165,15 @@ def build(
     universe_csv: Path | None,
     min_ticker_rows: int,
     mlflow_uri: str | None,
+    streams: str = "technical",
+    normalize: str = "per_window",
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if streams not in STREAM_PRESETS:
+        raise ValueError(f"Unknown --streams preset '{streams}'. Options: {list(STREAM_PRESETS)}")
+    stream_cols = STREAM_PRESETS[streams]
+    log.info("Stream preset: %s (%d streams)", streams, len(stream_cols))
 
     universe: list[str] | None = None
     if universe_csv is not None:
@@ -132,13 +183,23 @@ def build(
     log.info("Opening %s", db_path)
     conn = duckdb.connect(str(db_path), read_only=True)
     df = load_sep(conn, universe)
+    if streams == "v2_tuned":
+        df = join_v2_tuned_features(conn, df)
     conn.close()
+
+    if normalize == "cross_sectional":
+        # Pre-normalize feature streams per date across tickers. Skips the
+        # per-window z-score step in the materialization loop below.
+        df = cross_sectional_zscore(df, list(stream_cols))
+    elif normalize != "per_window":
+        raise ValueError(f"Unknown --normalize '{normalize}'")
     log.info(
-        "Loaded sep_base_academic: rows=%d tickers=%d dates %s → %s",
+        "Loaded sep_base_academic: rows=%d tickers=%d dates %s → %s  cols=%d",
         len(df),
         df["ticker"].nunique(),
         df["date"].min().date(),
         df["date"].max().date(),
+        df.shape[1],
     )
 
     # -------- Pass 1: build raw windows per ticker --------
@@ -147,13 +208,16 @@ def build(
     tickers_seen = 0
     tickers_skipped_short = 0
     tickers_with_windows = 0
+    # For v2_tuned we still need vol_scalar (for force) so we keep
+    # compute_technical=True (it also computes RSI etc but they're not in
+    # stream_cols so they're just carried and ignored).
     for ticker, g in df.groupby("ticker", sort=False):
         tickers_seen += 1
         if len(g) < min_ticker_rows:
             tickers_skipped_short += 1
             continue
         g = g.assign(ticker=ticker)
-        rws = build_raw_windows(g)
+        rws = build_raw_windows(g, stream_cols=stream_cols)
         if rws:
             tickers_with_windows += 1
             raw_windows.extend(rws)
@@ -226,6 +290,10 @@ def build(
 
     # -------- Materialize arrays per split --------
     manifest: dict = {
+        "stream_preset": streams,
+        "stream_cols": list(stream_cols),
+        "n_streams": len(stream_cols),
+        "normalize": normalize,
         "window": WINDOW,
         "step": STEP,
         "horizons": list(HORIZONS),
@@ -249,11 +317,18 @@ def build(
         if n == 0:
             continue
 
-        seqs = np.empty((n, WINDOW, len(STREAM_COLS)), dtype=np.float32)
+        seqs = np.empty((n, WINDOW, len(stream_cols)), dtype=np.float32)
         scalars = np.empty((n, 1), dtype=np.float32)
+        do_per_window_zscore = normalize == "per_window"
         for i, j in enumerate(idxs):
             rw = raw_windows[int(j)]
-            seqs[i] = zscore_sequence(rw.sequence)
+            if do_per_window_zscore:
+                seqs[i] = zscore_sequence(rw.sequence)
+            else:
+                # Already cross-sectionally normalized; just clean NaN/inf.
+                s = rw.sequence.astype(np.float32, copy=True)
+                s = np.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
+                seqs[i] = s
             scalars[i, 0] = rw.vol_scalar
 
         np.save(out_dir / f"{split}_sequences.npy", seqs)
@@ -347,10 +422,16 @@ def main() -> int:
                    help="Skip tickers with fewer rows than this")
     p.add_argument("--mlflow-uri", default="http://localhost:5000",
                    help="MLflow tracking URI (or empty string to disable)")
+    p.add_argument("--streams", choices=list(STREAM_PRESETS), default="technical",
+                   help="Which feature-stream preset to build (technical|v2_tuned)")
+    p.add_argument("--normalize", choices=("per_window", "cross_sectional"),
+                   default="per_window",
+                   help="Z-score within each 252-day window, or cross-sectionally per date")
     args = p.parse_args()
 
     mlflow_uri = args.mlflow_uri if args.mlflow_uri else None
-    build(args.db, args.out, args.universe, args.min_ticker_rows, mlflow_uri)
+    build(args.db, args.out, args.universe, args.min_ticker_rows, mlflow_uri,
+          streams=args.streams, normalize=args.normalize)
     return 0
 
 

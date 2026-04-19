@@ -78,3 +78,38 @@ def compute_all_streams(df_ticker: pd.DataFrame) -> pd.DataFrame:
 
 
 STREAM_COLS = ("rsi", "vol_ratio", "trend_ext", "atr_ratio")
+
+# v2_tuned feature set — the 23 columns that the production XGBoost model uses.
+# Pulled from five feat_* tables (fundamental / vol_sizing / beta / price_action /
+# momentum_v2). When selected, build_dataset.py joins these tables onto
+# sep_base_academic and passes them through as sequence streams.
+STREAM_COLS_V2_TUNED = (
+    # feat_fundamental
+    "earnings_yield", "fcf_yield", "roa", "book_to_market",
+    "operating_margin", "roe",
+    # feat_vol_sizing
+    "vol_21", "vol_63", "vol_blend",
+    # feat_beta
+    "beta_21d", "beta_63d", "beta_252d", "resid_vol_63d",
+    # feat_price_action
+    "hl_ratio", "range_pct", "ret_21d", "ret_5d",
+    # feat_momentum_v2
+    "mom_1m", "mom_3m", "mom_6m", "mom_12m", "mom_12_1", "reversal_1m",
+)
+
+STREAM_PRESETS = {
+    "technical": STREAM_COLS,
+    "v2_tuned": STREAM_COLS_V2_TUNED,
+}
+
+# Which source table each v2_tuned column lives in. Used by build_dataset.py
+# to join the correct feat_* tables onto sep_base_academic.
+V2_TUNED_SOURCES = {
+    "feat_fundamental":   ("earnings_yield", "fcf_yield", "roa", "book_to_market",
+                           "operating_margin", "roe"),
+    "feat_vol_sizing":    ("vol_21", "vol_63", "vol_blend"),
+    "feat_beta":          ("beta_21d", "beta_63d", "beta_252d", "resid_vol_63d"),
+    "feat_price_action":  ("hl_ratio", "range_pct", "ret_21d", "ret_5d"),
+    "feat_momentum_v2":   ("mom_1m", "mom_3m", "mom_6m", "mom_12m", "mom_12_1",
+                           "reversal_1m"),
+}
