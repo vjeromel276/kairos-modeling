@@ -22,6 +22,7 @@ venv/
 
 # Data
 *.npz
+*.npy
 *.parquet
 data/
 original_data/
@@ -32,6 +33,11 @@ checkpoints/
 *.old
 *.txt
 *.pkl
+
+# ML artifacts and tracking
+mlruns/
+mlartifacts/
+models/temporimutator/
 
 # System
 .DS_Store
