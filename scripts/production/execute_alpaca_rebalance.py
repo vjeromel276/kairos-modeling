@@ -297,23 +297,34 @@ def preview_orders(orders: List[Dict], account_info: Dict, intraday: bool = Fals
     print("=" * 70 + "\n")
 
 
-def execute_orders(api, orders: List[Dict], dry_run: bool = False, intraday: bool = False, max_gap_pct: float = None) -> List[Dict]:
+def execute_orders(api, orders: List[Dict], dry_run: bool = False,
+                    intraday: bool = False, max_gap_pct: float = None,
+                    order_mode: str = "market", limit_buffer_bps: float = 30) -> List[Dict]:
     """
     Submit orders to Alpaca.
-    
+
     Args:
         api: Alpaca API connection
         orders: List of order dicts
         dry_run: If True, don't actually submit
         intraday: If True, use immediate market orders; else MOO
         max_gap_pct: If set, skip orders where current price gapped beyond this % from ref_price
-    
+        order_mode: "market" (default) or "limit". When "limit" is used,
+            the limit price is current ask+buffer for buys and bid-buffer for sells.
+        limit_buffer_bps: Buffer around the current NBBO when placing limit orders.
+            30 bps is conservative — fills through most daily spreads without paying
+            the full open-auction move.
+
     Returns list of order results.
     """
     results = []
     skipped_gap = 0
-    
-    if intraday:
+
+    if order_mode == "limit":
+        order_type_label = "LIMIT"
+        order_type = "limit"
+        time_in_force = "day"
+    elif intraday:
         order_type_label = "MARKET"
         order_type = "market"
         time_in_force = "day"
@@ -336,6 +347,26 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, intraday: boo
         print(f"Fetching current prices for gap check (max {max_gap_pct}%)...")
         current_prices = get_current_prices(api, symbols)
         print(f"Got prices for {len(current_prices)} symbols\n")
+
+    # For limit orders, fetch live NBBO for every symbol so each order has a
+    # concrete bid/ask to build a limit price from.
+    quotes = {}
+    if order_mode == "limit":
+        print(f"Fetching NBBO for {len(orders)} symbols (limit orders, "
+              f"buffer={limit_buffer_bps:.0f} bps)...")
+        for o in orders:
+            sym = o["symbol"]
+            if sym in quotes:
+                continue
+            try:
+                q = api.get_latest_quote(sym)
+                bid = float(q.bid_price) if q.bid_price else None
+                ask = float(q.ask_price) if q.ask_price else None
+                if bid and ask and bid > 0 and ask > 0:
+                    quotes[sym] = {"bid": bid, "ask": ask}
+            except Exception as e:
+                print(f"  quote fail {sym}: {str(e)[:80]}")
+        print(f"Got quotes for {len(quotes)}/{len(orders)} symbols\n")
     
     for i, order in enumerate(orders, 1):
         symbol = order["symbol"]
@@ -379,11 +410,28 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, intraday: boo
                 "type": order_type,
                 "time_in_force": time_in_force,
             }
-            
+
+            limit_price = None
+            if order_mode == "limit":
+                if symbol not in quotes:
+                    print(f"✗ SKIPPED (no quote, can't build limit price)")
+                    results.append({
+                        "symbol": symbol, "side": side, "qty": qty,
+                        "status": "skipped_no_quote", "ref_price": ref_price,
+                    })
+                    continue
+                b = quotes[symbol]
+                if side == "buy":
+                    limit_price = round(b["ask"] * (1 + limit_buffer_bps / 10000.0), 2)
+                else:  # sell
+                    limit_price = round(b["bid"] * (1 - limit_buffer_bps / 10000.0), 2)
+                order_params["limit_price"] = limit_price
+
             # Submit order
             submitted = api.submit_order(**order_params)
-            print(f"✓ Order ID: {submitted.id}")
-            
+            extra = f" @ ${limit_price}" if limit_price else ""
+            print(f"✓ Order ID: {submitted.id}{extra}")
+
             result = {
                 "symbol": symbol,
                 "side": side,
@@ -393,8 +441,9 @@ def execute_orders(api, orders: List[Dict], dry_run: bool = False, intraday: boo
                 "order_type": order_type_label,
                 "time_in_force": time_in_force,
                 "ref_price": ref_price,
+                "limit_price": limit_price,
             }
-            
+
             results.append(result)
             
         except Exception as e:
@@ -439,6 +488,17 @@ def main():
     parser.add_argument("--intraday", action="store_true", help="Force immediate market orders")
     parser.add_argument("--force-moo", action="store_true", help="Force MOO orders even on paper trading (for testing)")
     parser.add_argument("--max-gap", type=float, metavar="PCT", help="Skip orders if price gapped more than PCT%% from reference (disaster protection)")
+    parser.add_argument("--order-type", choices=("market", "limit"), default="market",
+                        help="Order type. Default 'market'. Use 'limit' with --limit-buffer-bps for price-capped execution.")
+    parser.add_argument("--limit-buffer-bps", type=float, default=30,
+                        help="Buffer (bps) around live NBBO for limit orders. Default 30.")
+    parser.add_argument("--retry-unfilled", action="store_true",
+                        help="Read the most recent alpaca_orders_*.csv for this picks file, "
+                             "find unfilled orders, and resubmit them. Uses --order-type & "
+                             "--limit-buffer-bps. SELLs default to market on retry.")
+    parser.add_argument("--retry-sells-as-market", action="store_true",
+                        help="On --retry-unfilled, force SELL retries as market orders "
+                             "(never want to be stuck holding an outgoing position).")
 
     args = parser.parse_args()
 
@@ -478,15 +538,58 @@ def main():
     picks = load_picks(args.picks, portfolio_value if args.portfolio_value else None)
     print(f"Loaded {len(picks)} picks from {args.picks}")
     
-    # Calculate orders
-    orders = calculate_orders(picks, current_positions, portfolio_value)
+    # --- Retry-unfilled mode ---
+    # Build the order list from the previous alpaca_orders_*.csv instead of
+    # computing fresh from picks+positions. Useful when some of last run's
+    # limit orders expired/didn't fill.
+    if args.retry_unfilled:
+        picks_dir = os.path.dirname(args.picks) or "."
+        prior_csvs = sorted(
+            [f for f in os.listdir(picks_dir) if f.startswith("alpaca_orders_")
+             and f.endswith(".csv")]
+        )
+        if not prior_csvs:
+            print(f"--retry-unfilled: no prior alpaca_orders_*.csv in {picks_dir}")
+            sys.exit(1)
+        prior_path = os.path.join(picks_dir, prior_csvs[-1])
+        print(f"--retry-unfilled: inspecting {prior_path}")
+        prior = pd.read_csv(prior_path)
+        # Resolve live status for each submitted order
+        unfilled = []
+        for _, row in prior.iterrows():
+            oid = row.get("order_id")
+            if pd.isna(oid) or not oid:
+                continue
+            try:
+                o = api.get_order(oid)
+                filled_qty = float(o.filled_qty or 0)
+                total_qty = float(o.qty or 0)
+                remaining = max(0, total_qty - filled_qty)
+                if remaining > 0 and o.status in ("expired", "canceled",
+                                                   "rejected", "accepted",
+                                                   "new", "partially_filled",
+                                                   "pending_new", "done_for_day"):
+                    unfilled.append({
+                        "symbol": row["symbol"],
+                        "side": row["side"],
+                        "qty": int(remaining),
+                        "ref_price": row.get("ref_price", 0),
+                    })
+            except Exception as e:
+                print(f"  warning: {oid} lookup failed — {str(e)[:80]}")
+        print(f"--retry-unfilled: {len(unfilled)} orders need resubmission")
+        orders = unfilled
+    else:
+        orders = calculate_orders(picks, current_positions, portfolio_value)
     print(f"Calculated {len(orders)} orders")
-    
+
     if args.preview:
         preview_orders(orders, account_info, intraday=use_intraday, max_gap_pct=args.max_gap)
     elif args.execute:
         # Confirm before executing
-        if use_intraday:
+        if args.order_type == "limit":
+            order_type = f"LIMIT (buffer {args.limit_buffer_bps:.0f} bps around live NBBO)"
+        elif use_intraday:
             order_type = "MARKET (immediate)"
         else:
             order_type = "MOO (Market-on-Open)"
@@ -495,17 +598,38 @@ def main():
         print(f"    Account: {ALPACA_BASE_URL}")
         if is_paper_trading():
             print(f"    Environment: PAPER TRADING")
-        if not use_intraday:
+        if args.order_type != "limit" and not use_intraday:
             print(f"    Execution: Next market open (9:30 AM ET)")
         if args.max_gap:
             print(f"    Max gap protection: {args.max_gap}%")
+        if args.retry_unfilled:
+            print(f"    Mode: RETRY-UNFILLED")
         confirm = input("    Type 'YES' to confirm: ")
 
         if confirm != "YES":
             print("Cancelled.")
             sys.exit(0)
 
-        results = execute_orders(api, orders, dry_run=args.dry_run, intraday=use_intraday, max_gap_pct=args.max_gap)
+        # On retry, split sells to market if requested (never want to be
+        # stuck holding an outgoing position because a limit didn't cross).
+        if args.retry_unfilled and args.retry_sells_as_market:
+            sells = [o for o in orders if o["side"].lower() == "sell"]
+            buys = [o for o in orders if o["side"].lower() == "buy"]
+            print(f"  split on retry: {len(sells)} sells (MARKET) + "
+                  f"{len(buys)} buys ({args.order_type.upper()})")
+            sell_results = execute_orders(api, sells, dry_run=args.dry_run,
+                                          intraday=True, max_gap_pct=args.max_gap,
+                                          order_mode="market")
+            buy_results = execute_orders(api, buys, dry_run=args.dry_run,
+                                         intraday=use_intraday, max_gap_pct=args.max_gap,
+                                         order_mode=args.order_type,
+                                         limit_buffer_bps=args.limit_buffer_bps)
+            results = sell_results + buy_results
+        else:
+            results = execute_orders(api, orders, dry_run=args.dry_run,
+                                     intraday=use_intraday, max_gap_pct=args.max_gap,
+                                     order_mode=args.order_type,
+                                     limit_buffer_bps=args.limit_buffer_bps)
         
         # Save results in same directory as picks.csv
         picks_dir = os.path.dirname(args.picks)

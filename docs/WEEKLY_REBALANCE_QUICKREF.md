@@ -1,7 +1,28 @@
 # Kairos Weekly Rebalance Quick Reference
 
-**Last Updated:** 2026-04-12  
-**Based on:** 2026-04-10 rebalance run (successfully executed)
+**Last Updated:** 2026-04-19
+**Based on:** Live slippage analysis (outputs/evaluation/live_slippage)
+
+---
+
+## Cadence — run pipeline Monday morning, not Friday night
+
+Measured live slippage on 2026-01 through 2026-04: **~88 bps per trade** weighted mean
+when running Friday night → filling Monday open. Root cause: 64-hour signal-to-execution
+gap lets other quants act on the same Friday close data before your orders fill.
+
+**New recommended cadence:**
+
+| Step | When | Why |
+|---|---|---|
+| data sync + pipeline + generate_rebalance | **Monday 7-8 AM ET** | pipeline runs in <1 hour on Friday close data |
+| refresh_picks_prices | **Monday 9:25 AM ET** | re-anchors picks.csv price column to live Alpaca quotes; recomputes share counts |
+| execute (limit orders) | **Monday 9:30 AM ET** | fills minutes after reference price is set — matches backtest assumption |
+| retry-unfilled (sells as market, buys wider limit) | **Monday 9:45 AM ET** | ensures sells clear; gives buys a second chance at tighter price |
+
+Running Sat/Sun is fine for the pipeline step (data is already published by then), but
+**do not execute orders on a Saturday-night queue** — that is what produces the 88 bps
+slippage. The fixable lag is between signal anchoring and order fill.
 
 ---
 
@@ -11,39 +32,38 @@
 # Step 0: Activate environment (ALWAYS DO THIS FIRST)
 source ~/miniconda3/etc/profile.d/conda.sh && conda activate kairos-gpu
 
-# Step 1: Check data freshness
-python3 -c "
-import duckdb
-con = duckdb.connect('data/kairos.duckdb', read_only=True)
-print('sep_base:', con.execute('SELECT MAX(date) FROM sep_base').fetchone()[0])
-print('feat_matrix_v2:', con.execute('SELECT MAX(date) FROM feat_matrix_v2').fetchone()[0])
-print('regime_history:', con.execute('SELECT MAX(date) FROM regime_history_academic').fetchone()[0])
-con.close()
-"
+# Step 1: Data sync + pipeline (Monday 7-8 AM)
+python scripts/smart_data_sync.py --db data/kairos.duckdb
+# (re-run pipeline if needed: python scripts/run_pipeline.py --db data/kairos.duckdb)
 
-# Step 2: Check rebalance schedule
-python scripts/production/check_rebalance.py --date YYYY-MM-DD
-
-# Step 3: Generate picks (update values below)
+# Step 2: Generate picks
 python scripts/production/generate_rebalance.py \
     --db data/kairos.duckdb \
     --date YYYY-MM-DD \
-    --portfolio-value XXXXX \
+    --from-alpaca \
     --prior-holdings outputs/rebalance/PRIOR-DATE/picks.csv
 
-# Step 4: Review results
-cat outputs/rebalance/YYYY-MM-DD/portfolio_summary.json
-head -25 outputs/rebalance/YYYY-MM-DD/picks.csv
+# Step 3: Refresh picks.csv prices right before open (Monday 9:25 AM)
+python scripts/production/refresh_picks_prices.py \
+    --picks outputs/rebalance/YYYY-MM-DD/picks.csv
 
-# Step 5: Preview orders
+# Step 4: Preview limit orders
 python scripts/production/execute_alpaca_rebalance.py \
     --picks outputs/rebalance/YYYY-MM-DD/picks.csv \
-    --preview
+    --order-type limit --limit-buffer-bps 30 --preview
 
-# Step 6: Execute orders (type YES when prompted)
+# Step 5: Execute limit orders at/just after 9:30 open
 python scripts/production/execute_alpaca_rebalance.py \
     --picks outputs/rebalance/YYYY-MM-DD/picks.csv \
-    --execute <<< "YES"
+    --order-type limit --limit-buffer-bps 30 --execute <<< "YES"
+
+# Step 6: Retry anything that didn't fill (~9:45 AM)
+# SELLs retry as market (never want to hold an exiting position);
+# BUYs retry with wider buffer.
+python scripts/production/execute_alpaca_rebalance.py \
+    --picks outputs/rebalance/YYYY-MM-DD/picks.csv \
+    --retry-unfilled --retry-sells-as-market \
+    --order-type limit --limit-buffer-bps 60 --execute <<< "YES"
 ```
 
 ---
