@@ -641,6 +641,11 @@ def main():
                         help='Peak portfolio equity for CPPI (default: same as portfolio-value)')
     parser.add_argument('--no-cppi', action='store_true',
                         help='Disable CPPI allocation (always 100%% exposure)')
+    parser.add_argument('--reconcile-json', default=None,
+                        help="Path to reconcile_positions.py JSON output. When given, "
+                             "CPPI uses effective_equity (raw equity minus zombie value) "
+                             "rather than raw portfolio_value. Prevents delisted positions "
+                             "from inflating the drawdown reference.")
     parser.add_argument('--check-only', action='store_true', help='Only check if rebalance day')
     parser.add_argument('--force', action='store_true', help='Generate even if not rebalance day')
     
@@ -715,13 +720,34 @@ def main():
     logging.info("Calculating portfolio weights...")
     weights = calculate_weights(df, prior_weights)
 
-    # Apply CPPI capital allocation
+    # Apply CPPI capital allocation using EFFECTIVE equity when possible
+    # (subtracts value locked in untradable/zombie positions). Falls back to
+    # raw portfolio_value if no reconcile JSON is provided.
     cppi = None
     if not args.no_cppi:
-        peak_equity = args.peak_equity if args.peak_equity else args.portfolio_value
-        # Peak auto-updates: if current equity exceeds recorded peak, new peak
-        peak_equity = max(peak_equity, args.portfolio_value)
-        cppi = compute_cppi_allocation(args.portfolio_value, peak_equity)
+        effective_equity = args.portfolio_value
+        zombie_value = 0.0
+        if args.reconcile_json:
+            try:
+                with open(args.reconcile_json) as f:
+                    rec = json.load(f)
+                zombie_value = float(rec.get("zombie_total_value", 0.0))
+                if zombie_value > 0:
+                    effective_equity = args.portfolio_value - zombie_value
+                    logging.info(
+                        "CPPI: using effective equity $%.2f (raw $%.2f - zombies $%.2f)",
+                        effective_equity, args.portfolio_value, zombie_value,
+                    )
+            except Exception as e:
+                logging.warning("Could not load reconcile JSON: %s — using raw equity", e)
+
+        peak_equity = args.peak_equity if args.peak_equity else effective_equity
+        # Peak auto-updates: if current effective equity exceeds recorded peak, new peak
+        peak_equity = max(peak_equity, effective_equity)
+        cppi = compute_cppi_allocation(effective_equity, peak_equity)
+        cppi["zombie_value"] = zombie_value
+        cppi["effective_equity"] = effective_equity
+        cppi["raw_portfolio_value"] = args.portfolio_value
         weights = apply_cppi_exposure(weights, cppi)
 
     # Generate trades
