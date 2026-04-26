@@ -566,8 +566,8 @@ def main():
 
     if args.from_alpaca:
         import alpaca_trade_api as tradeapi
-        alpaca_key = os.getenv("ALPACA_API_KEY", "PK347Y7OMCULH3KC5MALII6ZWP")
-        alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "7vceesTCANBZXXjMjEuGs1a8N1YjkAudj4aKUUXofRHB")
+        alpaca_key = os.getenv("ALPACA_API_KEY", "PKVYH7YTBXN4I6BE266GI4BIK4")
+        alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "8ZYS2gT7YygsS96gNNr9XsQMGBuJArph5qZihR32oF8a")
         alpaca_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
         api = tradeapi.REST(alpaca_key, alpaca_secret, alpaca_url)
         equity = float(api.get_account().equity)
