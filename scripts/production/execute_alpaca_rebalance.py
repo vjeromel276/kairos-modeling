@@ -58,8 +58,8 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 
 # Alpaca configuration
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PK347Y7OMCULH3KC5MALII6ZWP")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "7vceesTCANBZXXjMjEuGs1a8N1YjkAudj4aKUUXofRHB")
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PKVYH7YTBXN4I6BE266GI4BIK4")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "8ZYS2gT7YygsS96gNNr9XsQMGBuJArph5qZihR32oF8a")
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 # Default max gap for disaster protection (None = no limit)
@@ -94,7 +94,7 @@ def get_current_positions(api) -> Dict[str, Dict]:
     positions = api.list_positions()
     return {
         p.symbol: {
-            "qty": int(p.qty),
+            "qty": float(p.qty),
             "market_value": float(p.market_value or 0),
             "current_price": float(p.current_price or 0),
             "avg_entry_price": float(p.avg_entry_price or 0),
