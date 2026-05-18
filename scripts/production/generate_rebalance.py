@@ -264,10 +264,10 @@ def load_data_freshness(con):
 # WEIGHT CALCULATION (Risk4 Methodology)
 # ============================================================================
 
-def calculate_weights(df, prior_weights=None):
+def calculate_weights(df, prior_weights=None, equal_weight=False):
     """
     Calculate portfolio weights using Risk4 methodology.
-    
+
     Steps:
         1. Z-score alpha cross-sectionally
         2. Clip outliers at ±3
@@ -277,20 +277,26 @@ def calculate_weights(df, prior_weights=None):
         6. Apply sector caps
         7. Apply turnover smoothing (if prior weights provided)
         8. Normalize
+
+    If equal_weight=True, steps 4-7 are bypassed and each pick gets 1/N.
     """
     top_n = CONFIG["top_n"]
     max_pos = CONFIG["max_position_pct"]
     max_sector = CONFIG["max_sector_mult"]
-    
+
     # Step 1 & 2: Z-score and clip
     df = df.copy()
     df['alpha_z'] = (df['alpha'] - df['alpha'].mean()) / df['alpha'].std()
     df['alpha_z'] = df['alpha_z'].clip(-3, 3)
-    
+
     # Step 3: Select top N
     top = df.nlargest(top_n, 'alpha_z').copy()
     top['rank'] = range(1, len(top) + 1)
-    
+
+    if equal_weight:
+        top['weight'] = 1.0 / len(top)
+        return top
+
     # Step 4: Base weights = alpha_z / vol_blend
     # Higher alpha and lower vol = higher weight
     top['raw_weight'] = top['alpha_z'] / top['vol_blend']
@@ -561,8 +567,14 @@ def main():
                         help='Auto-fetch portfolio value (equity) from Alpaca, overrides --portfolio-value')
     parser.add_argument('--check-only', action='store_true', help='Only check if rebalance day')
     parser.add_argument('--force', action='store_true', help='Generate even if not rebalance day')
+    parser.add_argument('--top-n', type=int, help='Override TOP_N (default from CONFIG)')
+    parser.add_argument('--equal-weight', action='store_true',
+                        help='Equal-weight (1/N) instead of Risk4 weighting; bypasses sector/position caps and turnover smoothing')
 
     args = parser.parse_args()
+
+    if args.top_n is not None:
+        CONFIG["top_n"] = args.top_n
 
     if args.from_alpaca:
         import alpaca_trade_api as tradeapi
@@ -641,7 +653,11 @@ def main():
     
     # Calculate weights
     logging.info("Calculating portfolio weights...")
-    weights = calculate_weights(df, prior_weights)
+    if args.equal_weight:
+        logging.info(f"Equal-weight mode: top {CONFIG['top_n']} at {1.0/CONFIG['top_n']:.2%} each")
+        if args.prior_holdings:
+            logging.warning("--prior-holdings ignored in --equal-weight mode")
+    weights = calculate_weights(df, prior_weights, equal_weight=args.equal_weight)
     
     # Generate trades
     logging.info("Generating trade list...")
